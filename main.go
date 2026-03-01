@@ -109,6 +109,7 @@ func main() {
 	protected.GET("/search", internal.HandleSearch)
 	protected.GET("/settings", internal.HandleGetSettings)
 	protected.PUT("/settings", internal.HandleUpdateSettings)
+	protected.GET("/analytics", internal.HandleAnalytics)
 
 	// Health check
 	e.GET("/api/health", func(c echo.Context) error {

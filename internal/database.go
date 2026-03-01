@@ -1032,3 +1032,177 @@ func SearchMessages(userDB *sql.DB, query string, limit int) ([]SearchResult, er
 
 	return results, nil
 }
+
+// GetAnalytics retrieves analytics data for the Summary tab
+func GetAnalytics(userDB *sql.DB, startDate, endDate *time.Time, topN int) (*AnalyticsResponse, error) {
+	analytics := &AnalyticsResponse{}
+
+	// Build date filter
+	dateFilter := ""
+	args := []interface{}{}
+	if startDate != nil {
+		dateFilter += " AND date >= ?"
+		args = append(args, startDate.Unix())
+	}
+	if endDate != nil {
+		dateFilter += " AND date <= ?"
+		args = append(args, endDate.Unix())
+	}
+
+	// 1. Get summary statistics
+	if err := getSummaryStats(userDB, dateFilter, args, analytics); err != nil {
+		return nil, err
+	}
+
+	// 2. Get top contacts
+	topContacts, err := getTopContacts(userDB, dateFilter, args, topN)
+	if err != nil {
+		return nil, err
+	}
+	analytics.TopContacts = topContacts
+
+	// 3. Get hourly distribution
+	hourly, err := getHourlyDistribution(userDB, dateFilter, args)
+	if err != nil {
+		return nil, err
+	}
+	analytics.HourlyDistribution = hourly
+
+	// 4. Get daily trend
+	daily, err := getDailyTrend(userDB, dateFilter, args)
+	if err != nil {
+		return nil, err
+	}
+	analytics.DailyTrend = daily
+
+	return analytics, nil
+}
+
+func getSummaryStats(userDB *sql.DB, dateFilter string, args []interface{}, analytics *AnalyticsResponse) error {
+	query := `
+		SELECT
+			COUNT(*) as total,
+			SUM(CASE WHEN record_type = 1 THEN 1 ELSE 0 END) as sms_count,
+			SUM(CASE WHEN record_type = 2 THEN 1 ELSE 0 END) as mms_count,
+			SUM(CASE WHEN record_type = 3 THEN 1 ELSE 0 END) as call_count,
+			SUM(CASE WHEN record_type IN (1,2) AND type = 2 THEN 1 ELSE 0 END) as sent,
+			SUM(CASE WHEN record_type IN (1,2) AND type = 1 THEN 1 ELSE 0 END) as received,
+			SUM(CASE WHEN record_type = 3 AND type = 1 THEN 1 ELSE 0 END) as incoming_calls,
+			SUM(CASE WHEN record_type = 3 AND type = 2 THEN 1 ELSE 0 END) as outgoing_calls,
+			SUM(CASE WHEN record_type = 3 AND type = 3 THEN 1 ELSE 0 END) as missed_calls,
+			COALESCE(SUM(CASE WHEN record_type = 3 THEN duration ELSE 0 END), 0) as total_duration,
+			COALESCE(AVG(CASE WHEN record_type IN (1,2) AND body IS NOT NULL AND body != '' THEN LENGTH(body) END), 0) as avg_length
+		FROM messages
+		WHERE 1=1 ` + dateFilter
+
+	return userDB.QueryRow(query, args...).Scan(
+		&analytics.TotalMessages,
+		&analytics.TotalSMS,
+		&analytics.TotalMMS,
+		&analytics.TotalCalls,
+		&analytics.TotalSent,
+		&analytics.TotalReceived,
+		&analytics.IncomingCalls,
+		&analytics.OutgoingCalls,
+		&analytics.MissedCalls,
+		&analytics.TotalCallDuration,
+		&analytics.AvgMessageLength,
+	)
+}
+
+func getTopContacts(userDB *sql.DB, dateFilter string, args []interface{}, limit int) ([]TopContact, error) {
+	query := `
+		SELECT
+			address,
+			MAX(COALESCE(contact_name, '')) as contact_name,
+			COUNT(*) as message_count,
+			SUM(CASE WHEN type = 2 THEN 1 ELSE 0 END) as sent_count,
+			SUM(CASE WHEN type = 1 THEN 1 ELSE 0 END) as received_count
+		FROM messages
+		WHERE record_type IN (1, 2) ` + dateFilter + `
+		GROUP BY address
+		ORDER BY message_count DESC
+		LIMIT ?`
+
+	queryArgs := append(args, limit)
+	rows, err := userDB.Query(query, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var contacts []TopContact
+	for rows.Next() {
+		var c TopContact
+		if err := rows.Scan(&c.Address, &c.ContactName, &c.MessageCount, &c.SentCount, &c.ReceivedCount); err != nil {
+			return nil, err
+		}
+		contacts = append(contacts, c)
+	}
+	return contacts, nil
+}
+
+func getHourlyDistribution(userDB *sql.DB, dateFilter string, args []interface{}) ([]HourlyDistribution, error) {
+	query := `
+		SELECT
+			CAST(strftime('%H', date, 'unixepoch', 'localtime') AS INTEGER) as hour,
+			COUNT(*) as count
+		FROM messages
+		WHERE record_type IN (1, 2) ` + dateFilter + `
+		GROUP BY hour
+		ORDER BY hour`
+
+	rows, err := userDB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Initialize all 24 hours with 0
+	hourMap := make(map[int]int)
+	for i := 0; i < 24; i++ {
+		hourMap[i] = 0
+	}
+
+	for rows.Next() {
+		var hour, count int
+		if err := rows.Scan(&hour, &count); err != nil {
+			return nil, err
+		}
+		hourMap[hour] = count
+	}
+
+	// Convert to slice
+	result := make([]HourlyDistribution, 24)
+	for i := 0; i < 24; i++ {
+		result[i] = HourlyDistribution{Hour: i, Count: hourMap[i]}
+	}
+	return result, nil
+}
+
+func getDailyTrend(userDB *sql.DB, dateFilter string, args []interface{}) ([]DailyCount, error) {
+	query := `
+		SELECT
+			strftime('%Y-%m-%d', date, 'unixepoch', 'localtime') as day,
+			COUNT(*) as count
+		FROM messages
+		WHERE record_type IN (1, 2) ` + dateFilter + `
+		GROUP BY day
+		ORDER BY day`
+
+	rows, err := userDB.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var trend []DailyCount
+	for rows.Next() {
+		var d DailyCount
+		if err := rows.Scan(&d.Date, &d.Count); err != nil {
+			return nil, err
+		}
+		trend = append(trend, d)
+	}
+	return trend, nil
+}

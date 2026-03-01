@@ -110,3 +110,40 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 	ConfirmPassword string `json:"confirm_password"`
 }
+
+// Analytics types
+
+type TopContact struct {
+	Address       string `json:"address"`
+	ContactName   string `json:"contact_name,omitempty"`
+	MessageCount  int    `json:"message_count"`
+	SentCount     int    `json:"sent_count"`
+	ReceivedCount int    `json:"received_count"`
+}
+
+type HourlyDistribution struct {
+	Hour  int `json:"hour"`
+	Count int `json:"count"`
+}
+
+type DailyCount struct {
+	Date  string `json:"date"`
+	Count int    `json:"count"`
+}
+
+type AnalyticsResponse struct {
+	TotalMessages      int                  `json:"total_messages"`
+	TotalSMS           int                  `json:"total_sms"`
+	TotalMMS           int                  `json:"total_mms"`
+	TotalCalls         int                  `json:"total_calls"`
+	TotalSent          int                  `json:"total_sent"`
+	TotalReceived      int                  `json:"total_received"`
+	IncomingCalls      int                  `json:"incoming_calls"`
+	OutgoingCalls      int                  `json:"outgoing_calls"`
+	MissedCalls        int                  `json:"missed_calls"`
+	TotalCallDuration  int                  `json:"total_call_duration"`
+	AvgMessageLength   float64              `json:"avg_message_length"`
+	TopContacts        []TopContact         `json:"top_contacts"`
+	HourlyDistribution []HourlyDistribution `json:"hourly_distribution"`
+	DailyTrend         []DailyCount         `json:"daily_trend"`
+}

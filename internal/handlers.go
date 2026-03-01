@@ -552,6 +552,51 @@ func HandleSearch(c echo.Context) error {
 	return c.JSON(http.StatusOK, results)
 }
 
+// HandleAnalytics returns analytics data for the Summary tab
+func HandleAnalytics(c echo.Context) error {
+	userDB, err := getUserDB(c)
+	if err != nil {
+		slog.Error("Error getting user database", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to get user database",
+		})
+	}
+
+	var startDate, endDate *time.Time
+
+	if startStr := c.QueryParam("start"); startStr != "" {
+		t, err := time.Parse(time.RFC3339, startStr)
+		if err == nil {
+			startDate = &t
+		}
+	}
+
+	if endStr := c.QueryParam("end"); endStr != "" {
+		t, err := time.Parse(time.RFC3339, endStr)
+		if err == nil {
+			endDate = &t
+		}
+	}
+
+	// Default to top 10 contacts
+	topN := 10
+	if topStr := c.QueryParam("top"); topStr != "" {
+		if val, err := strconv.Atoi(topStr); err == nil && val > 0 && val <= 50 {
+			topN = val
+		}
+	}
+
+	analytics, err := GetAnalytics(userDB, startDate, endDate, topN)
+	if err != nil {
+		slog.Error("Error getting analytics", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to get analytics",
+		})
+	}
+
+	return c.JSON(http.StatusOK, analytics)
+}
+
 // HandleVersion returns the application version
 func HandleVersion(c echo.Context) error {
 	// Try to read version from version.json file first (Docker builds)

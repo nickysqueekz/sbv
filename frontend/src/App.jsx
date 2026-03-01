@@ -10,6 +10,7 @@ import Calls from './components/Calls'
 import DateFilter from './components/DateFilter'
 import Upload from './components/Upload'
 import Search from './components/Search'
+import Summary from './components/Summary'
 import ChangePasswordModal from './components/ChangePasswordModal'
 import SettingsModal from './components/SettingsModal'
 import './App.css'
@@ -54,6 +55,8 @@ function App() {
     ? 'calls'
     : location.pathname.startsWith('/search')
     ? 'search'
+    : location.pathname.startsWith('/summary')
+    ? 'summary'
     : 'conversations'
 
   useEffect(() => {
@@ -166,6 +169,8 @@ function App() {
       navigate('/calls')
     } else if (view === 'search') {
       navigate('/search')
+    } else if (view === 'summary') {
+      navigate('/summary')
     } else {
       navigate('/')
     }
@@ -296,6 +301,17 @@ function App() {
                 <span className="d-none d-sm-inline">Activity</span>
               </button>
             </li>
+            <li className="nav-item">
+              <button
+                className={`nav-link ${activeView === 'summary' ? 'active' : ''}`}
+                onClick={() => handleViewChange('summary')}
+              >
+                <svg style={{width: '1rem', height: '1rem'}} className="me-sm-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                <span className="d-none d-sm-inline">Summary</span>
+              </button>
+            </li>
           </ul>
         </div>
       </div>
@@ -379,6 +395,14 @@ function App() {
           /* Calls View */
           <div className="flex-fill bg-white rounded-3 shadow overflow-hidden border" style={{minWidth: 0}}>
             <Calls
+              startDate={startDate}
+              endDate={endDate}
+            />
+          </div>
+        ) : activeView === 'summary' ? (
+          /* Summary View */
+          <div className="flex-fill bg-white rounded-3 shadow overflow-hidden border" style={{minWidth: 0}}>
+            <Summary
               startDate={startDate}
               endDate={endDate}
             />
