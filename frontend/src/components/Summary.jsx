@@ -200,7 +200,7 @@ function Summary({ startDate, endDate }) {
               <div className="card-header">Top Contacts</div>
               <div className="card-body">
                 {topContactsData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={200}>
+                  <ResponsiveContainer width="100%" height={Math.max(200, topContactsData.length * 36)}>
                     <BarChart data={topContactsData} layout="vertical">
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis type="number" />
