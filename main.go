@@ -110,6 +110,7 @@ func main() {
 	protected.GET("/settings", internal.HandleGetSettings)
 	protected.PUT("/settings", internal.HandleUpdateSettings)
 	protected.GET("/analytics", internal.HandleAnalytics)
+	protected.GET("/watch-dirs", internal.HandleListWatchDirs)
 
 	// Health check
 	e.GET("/api/health", func(c echo.Context) error {
@@ -142,6 +143,7 @@ func main() {
 
 	// Start auto-import service
 	dataDir := dbPathPrefix + "/data"
+	protected.POST("/watch-dirs/import", internal.HandleImportWatchDir(dataDir))
 	autoImportService := internal.NewAutoImportService(dataDir)
 	autoImportService.Start()
 	defer autoImportService.Stop()

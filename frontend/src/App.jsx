@@ -9,6 +9,7 @@ import Activity from './components/Activity'
 import Calls from './components/Calls'
 import DateFilter from './components/DateFilter'
 import Upload from './components/Upload'
+import WatchDirs from './components/WatchDirs'
 import Search from './components/Search'
 import Summary from './components/Summary'
 import ChangePasswordModal from './components/ChangePasswordModal'
@@ -28,6 +29,7 @@ function App() {
   const [endDate, setEndDate] = useState(null)
   const [dateRange, setDateRange] = useState({ min: null, max: null })
   const [showUpload, setShowUpload] = useState(false)
+  const [showWatchDirs, setShowWatchDirs] = useState(false)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [showSettingsModal, setShowSettingsModal] = useState(false)
   const [searchFilter, setSearchFilter] = useState('')
@@ -199,6 +201,16 @@ function App() {
             <h1 className="h5 mb-0 fw-bold">SMS Backup Viewer</h1>
           </div>
           <div className="d-flex align-items-center gap-2">
+            <button
+              onClick={() => setShowWatchDirs(true)}
+              className="btn btn-light btn-sm shadow-sm d-flex align-items-center gap-1"
+              title="Browse backup files from server directories"
+            >
+              <svg style={{width: '1rem', height: '1rem'}} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+              <span className="d-none d-sm-inline">Browse</span>
+            </button>
             <button
               onClick={() => setShowUpload(true)}
               className="btn btn-light btn-sm shadow-sm d-flex align-items-center gap-1"
@@ -423,6 +435,17 @@ function App() {
         <Upload
           onClose={() => setShowUpload(false)}
           onSuccess={handleUploadSuccess}
+        />
+      )}
+
+      {/* Browse Watch Dirs Modal */}
+      {showWatchDirs && (
+        <WatchDirs
+          onClose={() => setShowWatchDirs(false)}
+          onSuccess={() => {
+            setShowWatchDirs(false)
+            fetchConversations()
+          }}
         />
       )}
 
