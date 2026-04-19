@@ -144,6 +144,7 @@ func main() {
 	// Start auto-import service
 	dataDir := dbPathPrefix + "/data"
 	protected.POST("/watch-dirs/import", internal.HandleImportWatchDir(dataDir))
+	protected.POST("/watch-dirs/import-all", internal.HandleImportAllWatchDirs(dataDir))
 	autoImportService := internal.NewAutoImportService(dataDir)
 	autoImportService.Start()
 	defer autoImportService.Stop()

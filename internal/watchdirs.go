@@ -21,6 +21,13 @@ type WatchDirFile struct {
 	ModTime time.Time `json:"modTime"`
 }
 
+// WatchDirSummary summarises the contents of one watch directory
+type WatchDirSummary struct {
+	Dir        string `json:"dir"`
+	TotalFiles int    `json:"total_files"`
+	TotalSize  int64  `json:"total_size"`
+}
+
 // GetWatchDirs returns the list of configured watch directories from WATCH_DIRS env var
 func GetWatchDirs() []string {
 	val := os.Getenv("WATCH_DIRS")
@@ -37,56 +44,61 @@ func GetWatchDirs() []string {
 	return dirs
 }
 
-// ListWatchDirFiles scans all configured watch directories and returns XML files found
-func ListWatchDirFiles() ([]WatchDirFile, error) {
-	dirs := GetWatchDirs()
+// listXMLFiles returns all XML files found under dir (top-level only)
+func listXMLFiles(dir string) ([]WatchDirFile, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
 	var files []WatchDirFile
-
-	for _, dir := range dirs {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			// Skip inaccessible directories but don't fail the whole request
+	for _, entry := range entries {
+		if entry.IsDir() {
 			continue
 		}
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			if !strings.HasSuffix(strings.ToLower(name), ".xml") {
-				continue
-			}
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-			files = append(files, WatchDirFile{
-				Name:    name,
-				Path:    filepath.Join(dir, name),
-				Dir:     dir,
-				Size:    info.Size(),
-				ModTime: info.ModTime(),
-			})
+		name := entry.Name()
+		if !strings.HasSuffix(strings.ToLower(name), ".xml") {
+			continue
 		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, WatchDirFile{
+			Name:    name,
+			Path:    filepath.Join(dir, name),
+			Dir:     dir,
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
+		})
 	}
-
 	return files, nil
 }
 
-// HandleListWatchDirs returns the list of XML files available in watch directories
+// HandleListWatchDirs returns summary counts for each watch directory (not all file paths)
 func HandleListWatchDirs(c echo.Context) error {
 	watchDirs := GetWatchDirs()
+	var summaries []WatchDirSummary
 
-	files, err := ListWatchDirFiles()
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": fmt.Sprintf("Failed to list watch directories: %v", err),
+	for _, dir := range watchDirs {
+		files, err := listXMLFiles(dir)
+		if err != nil {
+			// Directory inaccessible — still include it with zero counts
+			summaries = append(summaries, WatchDirSummary{Dir: dir})
+			continue
+		}
+		var totalSize int64
+		for _, f := range files {
+			totalSize += f.Size
+		}
+		summaries = append(summaries, WatchDirSummary{
+			Dir:        dir,
+			TotalFiles: len(files),
+			TotalSize:  totalSize,
 		})
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"watch_dirs": watchDirs,
-		"files":      files,
+		"watch_dirs": summaries,
 	})
 }
 
@@ -155,34 +167,101 @@ func HandleImportWatchDir(dataDir string) echo.HandlerFunc {
 		}
 
 		// Copy the file into the user's ingest directory
+		if err := copyToIngest(req.Path, ingestDir); err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": fmt.Sprintf("Failed to queue file: %v", err),
+			})
+		}
+
 		filename := filepath.Base(req.Path)
-		destPath := filepath.Join(ingestDir, filename)
-
-		src, err := os.Open(req.Path)
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{
-				"error": fmt.Sprintf("Failed to open source file: %v", err),
-			})
-		}
-		defer src.Close()
-
-		dst, err := os.Create(destPath)
-		if err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{
-				"error": fmt.Sprintf("Failed to create destination file: %v", err),
-			})
-		}
-		defer dst.Close()
-
-		if _, err := io.Copy(dst, src); err != nil {
-			return c.JSON(http.StatusInternalServerError, map[string]string{
-				"error": fmt.Sprintf("Failed to copy file: %v", err),
-			})
-		}
-
 		return c.JSON(http.StatusOK, map[string]string{
 			"message":  fmt.Sprintf("File '%s' queued for import. It will be processed within 1 minute.", filename),
 			"filename": filename,
+		})
+	}
+}
+
+// copyToIngest copies a single source file into ingestDir, skipping if already present
+func copyToIngest(srcPath, ingestDir string) error {
+	filename := filepath.Base(srcPath)
+	destPath := filepath.Join(ingestDir, filename)
+
+	// Skip files already queued
+	if _, err := os.Stat(destPath); err == nil {
+		return nil
+	}
+
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+
+	_, err = io.Copy(dst, src)
+	return err
+}
+
+// HandleImportAllWatchDirs queues every XML file from all watch directories into the user's ingest dir
+func HandleImportAllWatchDirs(dataDir string) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		userID, ok := c.Get("user_id").(string)
+		if !ok || userID == "" {
+			return c.JSON(http.StatusUnauthorized, map[string]string{
+				"error": "User not authenticated",
+			})
+		}
+
+		ingestDir := filepath.Join(dataDir, userID, "ingest")
+		if err := os.MkdirAll(ingestDir, 0755); err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{
+				"error": fmt.Sprintf("Failed to create ingest directory: %v", err),
+			})
+		}
+
+		watchDirs := GetWatchDirs()
+		queued := 0
+		skipped := 0
+		var errs []string
+
+		for _, dir := range watchDirs {
+			files, err := listXMLFiles(dir)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", dir, err))
+				continue
+			}
+			for _, f := range files {
+				destPath := filepath.Join(ingestDir, f.Name)
+				if _, err := os.Stat(destPath); err == nil {
+					skipped++
+					continue
+				}
+				if err := copyToIngest(f.Path, ingestDir); err != nil {
+					errs = append(errs, fmt.Sprintf("%s: %v", f.Name, err))
+				} else {
+					queued++
+				}
+			}
+		}
+
+		msg := fmt.Sprintf("Queued %d files for import", queued)
+		if skipped > 0 {
+			msg += fmt.Sprintf(" (%d already queued, skipped)", skipped)
+		}
+		if len(errs) > 0 {
+			msg += fmt.Sprintf("; %d errors", len(errs))
+		}
+
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"message": msg,
+			"queued":  queued,
+			"skipped": skipped,
+			"errors":  errs,
 		})
 	}
 }
