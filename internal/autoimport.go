@@ -168,11 +168,19 @@ func (s *AutoImportService) processFile(userID, filePath, filename string) {
 	if strings.HasSuffix(strings.ToLower(filename), ".xml") {
 		logWriter.log("Detected XML backup file")
 		parseErr = s.parseXMLBackup(userDB, filePath, logWriter)
-	} else {
-		logWriter.log("ERROR: Unsupported file type")
-		slog.Warn("Unsupported file type", "userID", userID, "file", filename)
-		return
-	}
+        } else if strings.HasSuffix(strings.ToLower(filename), ".json") {
+                format := sniffJSONExportFormat(filePath)
+                logWriter.log("Detected JSON export file, format: %s", format)
+                switch format {
+                case "telegram":
+                        parseErr = s.parseTelegramExport(userDB, filePath, logWriter)
+                case "google_chat":
+                        parseErr = s.parseGoogleChatExport(userDB, filePath, logWriter)
+                default:
+                        logWriter.log("ERROR: Unrecognized JSON format (expected Telegram or Google Chat export)")
+                        slog.Warn("Unrecognized JSON format", "userID", userID, "file", filename)
+                        return
+                }
 
 	// Move file to complete directory
 	completeDir := filepath.Join(s.dataDir, userID, "complete")
@@ -291,4 +299,68 @@ func (l *importLogger) log(format string, args ...interface{}) {
 	l.file.Sync() // Ensure it's written to disk
 
 	slog.Info("Auto-import", "userID", l.userID, "file", l.filename, "message", message)
+}
+
+// sniffJSONExportFormat reads the first 4KB of a JSON file to determine whether it
+// is a Telegram Desktop export or a Google Chat Takeout messages.json.
+func sniffJSONExportFormat(filePath string) string {
+f, err := os.Open(filePath)
+if err != nil {
+return "unknown"
+}
+defer f.Close()
+
+buf := make([]byte, 4096)
+n, _ := f.Read(buf)
+preview := string(buf[:n])
+
+if strings.Contains(preview, `"date_unixtime"`) || strings.Contains(preview, `"from_id"`) {
+return "telegram"
+}
+if strings.Contains(preview, `"created_date"`) && strings.Contains(preview, `"creator"`) {
+return "google_chat"
+}
+return "unknown"
+}
+
+// parseTelegramExport parses a Telegram Desktop result.json export into userDB.
+func (s *AutoImportService) parseTelegramExport(userDB *sql.DB, filePath string, logger *importLogger) error {
+logger.log("Parsing Telegram export")
+
+file, err := os.Open(filePath)
+if err != nil {
+return fmt.Errorf("failed to open file: %w", err)
+}
+defer file.Close()
+
+inserted, skipped, err := ParseTelegramExport(userDB, file)
+if err != nil {
+return fmt.Errorf("failed to parse Telegram export: %w", err)
+}
+
+logger.log("Import statistics:")
+logger.log("  Messages inserted: %d", inserted)
+logger.log("  Messages skipped (duplicates): %d", skipped)
+return nil
+}
+
+// parseGoogleChatExport parses a Google Chat Takeout messages.json file into userDB.
+func (s *AutoImportService) parseGoogleChatExport(userDB *sql.DB, filePath string, logger *importLogger) error {
+logger.log("Parsing Google Chat export")
+
+file, err := os.Open(filePath)
+if err != nil {
+return fmt.Errorf("failed to open file: %w", err)
+}
+defer file.Close()
+
+inserted, skipped, err := ParseGoogleChatExport(userDB, file)
+if err != nil {
+return fmt.Errorf("failed to parse Google Chat export: %w", err)
+}
+
+logger.log("Import statistics:")
+logger.log("  Messages inserted: %d", inserted)
+logger.log("  Messages skipped (duplicates): %d", skipped)
+return nil
 }
