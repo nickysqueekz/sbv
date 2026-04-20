@@ -104,7 +104,6 @@ func main() {
 	protected.GET("/calls", internal.HandleCalls)
 	protected.GET("/daterange", internal.HandleDateRange)
 	protected.GET("/progress", internal.HandleProgress)
-	protected.GET("/queue-status", internal.HandleQueueStatus(dataDir))
 	protected.GET("/export", internal.HandleExport)
 	protected.GET("/media", internal.HandleMedia)
 	protected.GET("/media-items", internal.HandleMediaItems)
@@ -147,6 +146,7 @@ func main() {
 	// Start auto-import service
 	dataDir := dbPathPrefix + "/data"
 	protected.POST("/watch-dirs/import", internal.HandleImportWatchDir(dataDir))
+	protected.GET("/queue-status", internal.HandleQueueStatus(dataDir))
 	protected.POST("/watch-dirs/import-all", internal.HandleImportAllWatchDirs(dataDir))
 	autoImportService := internal.NewAutoImportService(dataDir)
 	autoImportService.Start()
