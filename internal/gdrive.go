@@ -193,50 +193,74 @@ return newTok.AccessToken, nil
 // HandleGDriveFiles lists Drive files matching the optional ?q= search term.
 // Only .xml, .json, and .zip files are returned.
 func HandleGDriveFiles(c echo.Context) error {
-sess := c.Get("session").(*Session)
-search := c.QueryParam("q")
+	sess := c.Get("session").(*Session)
+	search := c.QueryParam("q")
+	folderID := c.QueryParam("folder_id")
+	if folderID == "" {
+		folderID = "root"
+	}
 
-accessToken, err := getAccessToken(sess.UserID)
-if err != nil {
-return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not connected to Google Drive"})
-}
+	accessToken, err := getAccessToken(sess.UserID)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not connected to Google Drive"})
+	}
 
-// Build Drive API query
-driveQ := "(mimeType='application/zip' or name contains '.xml' or name contains '.json') and trashed=false"
-if search != "" {
-driveQ = fmt.Sprintf("name contains '%s' and trashed=false", sanitizeSearchTerm(search))
-}
+	// Build Drive API query
+	var driveQ string
+	if search != "" {
+		// When searching, don't restrict to a folder — search whole Drive
+		driveQ = fmt.Sprintf("name contains '%s' and mimeType!='application/vnd.google-apps.folder' and trashed=false", sanitizeSearchTerm(search))
+	} else {
+		// List contents of the current folder: subfolders + importable files
+		driveQ = fmt.Sprintf("'%s' in parents and (mimeType='application/vnd.google-apps.folder' or mimeType='application/zip' or name contains '.xml' or name contains '.json') and trashed=false", sanitizeSearchTerm(folderID))
+	}
 
-apiURL := "https://www.googleapis.com/drive/v3/files?q=" +
-url.QueryEscape(driveQ) +
-"&fields=files(id,name,mimeType,size,modifiedTime)&pageSize=100"
+	apiURL := "https://www.googleapis.com/drive/v3/files?q=" +
+		url.QueryEscape(driveQ) +
+		"&fields=files(id,name,mimeType,size,modifiedTime)&pageSize=200&orderBy=folder,name"
 
-req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, apiURL, nil)
-if err != nil {
-return c.JSON(http.StatusInternalServerError, map[string]string{"error": "request build failed"})
-}
-req.Header.Set("Authorization", "Bearer "+accessToken)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, apiURL, nil)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "request build failed"})
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 
-resp, err := http.DefaultClient.Do(req)
-if err != nil {
-return c.JSON(http.StatusBadGateway, map[string]string{"error": "Drive API unreachable"})
-}
-defer resp.Body.Close()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return c.JSON(http.StatusBadGateway, map[string]string{"error": "Drive API unreachable"})
+	}
+	defer resp.Body.Close()
 
-if resp.StatusCode != http.StatusOK {
-return c.JSON(http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("Drive API returned %d", resp.StatusCode)})
-}
+	if resp.StatusCode != http.StatusOK {
+		return c.JSON(http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("Drive API returned %d", resp.StatusCode)})
+	}
 
-var result struct {
-Files []gdriveFile `json:"files"`
-}
-if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to parse Drive response"})
-}
-if result.Files == nil {
-result.Files = []gdriveFile{}
-}
-return c.JSON(http.StatusOK, result.Files)
+	var result struct {
+		Files []gdriveFile `json:"files"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to parse Drive response"})
+	}
+	if result.Files == nil {
+		result.Files = []gdriveFile{}
+	}
+
+	// Split into folders and files so the frontend can handle them separately
+	folders := []gdriveFile{}
+	files := []gdriveFile{}
+	for _, f := range result.Files {
+		if f.MimeType == "application/vnd.google-apps.folder" {
+			folders = append(folders, f)
+		} else {
+			files = append(files, f)
+		}
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"folders":  folders,
+		"files":    files,
+		"folderID": folderID,
+	})
 }
 
 // HandleGDriveImport downloads a Drive file into the user''s ingest directory.

@@ -157,6 +157,7 @@ func main() {
 	protected.POST("/watch-dirs/import", internal.HandleImportWatchDir(dataDir))
 	protected.POST("/watch-dirs/import-batch", internal.HandleImportBatchWatchDir(dataDir))
 	protected.GET("/queue-status", internal.HandleQueueStatus(dataDir))
+	protected.DELETE("/queue/:filename", internal.HandleCancelQueue(dataDir))
 	protected.POST("/watch-dirs/import-all", internal.HandleImportAllWatchDirs(dataDir))
 
 	// Google Drive routes

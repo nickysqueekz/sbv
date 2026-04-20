@@ -298,12 +298,31 @@ function App() {
 
       {/* Ingest queue banner */}
       {(queueStatus.pending > 0 || queueStatus.processing) && (
-        <div className="bg-warning text-dark px-3 py-1 d-flex align-items-center gap-2" style={{fontSize: '0.82rem', zIndex: 1029}}>
+        <div className="bg-warning text-dark px-3 py-1 d-flex align-items-center gap-2 flex-wrap" style={{fontSize: '0.82rem', zIndex: 1029}}>
           <div className="spinner-border spinner-border-sm text-dark" role="status" style={{width: '0.75rem', height: '0.75rem'}} />
-          {queueStatus.processing
-            ? <>Processing: {queueStatus.processing.processed.toLocaleString()} / {(queueStatus.processing.total || '?').toLocaleString()} messages — {queueStatus.pending} file{queueStatus.pending !== 1 ? 's' : ''} queued</>
-            : <>{queueStatus.pending} file{queueStatus.pending !== 1 ? 's' : ''} queued for import — processing starts within 1 minute</>
-          }
+          <span className="flex-grow-1">
+            {queueStatus.processing
+              ? <>Processing: {queueStatus.processing.processed.toLocaleString()} / {(queueStatus.processing.total || '?').toLocaleString()} messages — {queueStatus.pending} file{queueStatus.pending !== 1 ? 's' : ''} queued</>
+              : <>{queueStatus.pending} file{queueStatus.pending !== 1 ? 's' : ''} queued for import — processing starts within 1 minute</>
+            }
+          </span>
+          {!queueStatus.processing && queueStatus.files && queueStatus.files.map(f => (
+            <span key={f} className="d-flex align-items-center gap-1 badge bg-dark bg-opacity-10 text-dark fw-normal" style={{fontSize: '0.78rem'}}>
+              {f}
+              <button
+                className="btn-close btn-close-sm ms-1"
+                style={{fontSize: '0.55rem'}}
+                title={`Cancel import of ${f}`}
+                onClick={async () => {
+                  try {
+                    await axios.delete(`${API_BASE}/queue/${encodeURIComponent(f)}`, { withCredentials: true })
+                    const res = await axios.get(`${API_BASE}/queue-status`, { withCredentials: true })
+                    setQueueStatus(res.data)
+                  } catch {}
+                }}
+              />
+            </span>
+          ))}
         </div>
       )}
 

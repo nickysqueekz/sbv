@@ -807,3 +807,25 @@ func encodeBase64(data []byte) string {
 	}
 	return base64.StdEncoding.EncodeToString(data)
 }
+// HandleCancelQueue removes a single file from the user's ingest directory.
+func HandleCancelQueue(dataDir string) echo.HandlerFunc {
+return func(c echo.Context) error {
+userID, ok := c.Get("user_id").(string)
+if !ok || userID == "" {
+return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+}
+filename := filepath.Base(c.Param("filename"))
+if filename == "" || filename == "." {
+return c.JSON(http.StatusBadRequest, map[string]string{"error": "filename required"})
+}
+ingestDir := filepath.Join(dataDir, userID, "ingest")
+target := filepath.Join(ingestDir, filename)
+if err := os.Remove(target); err != nil {
+if os.IsNotExist(err) {
+return c.JSON(http.StatusNotFound, map[string]string{"error": "file not in queue"})
+}
+return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+}
+return c.JSON(http.StatusOK, map[string]string{"status": "cancelled", "filename": filename})
+}
+}

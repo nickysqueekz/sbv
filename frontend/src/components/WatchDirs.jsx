@@ -366,37 +366,86 @@ function BrowseView({ dir, onBack }) {
 
 function GoogleDriveView({ onBack }) {
   const [status, setStatus] = useState(null)  // {configured, connected}
+  const [folders, setFolders] = useState([])
   const [files, setFiles] = useState([])
   const [loading, setLoading] = useState(true)
   const [filesLoading, setFilesLoading] = useState(false)
   const [error, setError] = useState(null)
   const [search, setSearch] = useState('')
+  const [searchInput, setSearchInput] = useState('')
   const [selected, setSelected] = useState(new Set())
   const [importing, setImporting] = useState(false)
   const [importResults, setImportResults] = useState([])
+  // folderStack: [{id, name}, ...] — last entry is current folder
+  const [folderStack, setFolderStack] = useState([{ id: 'root', name: 'My Drive' }])
 
   useEffect(() => {
     axios.get(`${API_BASE}/gdrive/status`, { withCredentials: true })
       .then(res => {
         setStatus(res.data)
-        if (res.data.connected) loadFiles('')
+        if (res.data.connected) loadFolder('root')
       })
       .catch(err => setError(err.response?.data?.error || 'Failed to get Drive status'))
       .finally(() => setLoading(false))
   }, [])
 
-  function loadFiles(q) {
+  function loadFolder(folderId) {
     setFilesLoading(true)
     setError(null)
-    axios.get(`${API_BASE}/gdrive/files`, { params: { q }, withCredentials: true })
-      .then(res => { setFiles(res.data || []); setSelected(new Set()) })
+    setSelected(new Set())
+    axios.get(`${API_BASE}/gdrive/files`, { params: { folder_id: folderId }, withCredentials: true })
+      .then(res => {
+        setFolders(res.data.folders || [])
+        setFiles(res.data.files || [])
+      })
       .catch(err => setError(err.response?.data?.error || 'Failed to list Drive files'))
+      .finally(() => setFilesLoading(false))
+  }
+
+  function loadSearch(q) {
+    setFilesLoading(true)
+    setError(null)
+    setSelected(new Set())
+    axios.get(`${API_BASE}/gdrive/files`, { params: { q }, withCredentials: true })
+      .then(res => {
+        setFolders(res.data.folders || [])
+        setFiles(res.data.files || [])
+      })
+      .catch(err => setError(err.response?.data?.error || 'Failed to search Drive'))
       .finally(() => setFilesLoading(false))
   }
 
   function handleSearch(e) {
     e.preventDefault()
-    loadFiles(search.trim())
+    const q = searchInput.trim()
+    setSearch(q)
+    if (q) {
+      loadSearch(q)
+    } else {
+      loadFolder(folderStack[folderStack.length - 1].id)
+    }
+  }
+
+  function clearSearch() {
+    setSearchInput('')
+    setSearch('')
+    loadFolder(folderStack[folderStack.length - 1].id)
+  }
+
+  function enterFolder(folder) {
+    const next = [...folderStack, { id: folder.id, name: folder.name }]
+    setFolderStack(next)
+    setSearchInput('')
+    setSearch('')
+    loadFolder(folder.id)
+  }
+
+  function navigateTo(index) {
+    const next = folderStack.slice(0, index + 1)
+    setFolderStack(next)
+    setSearchInput('')
+    setSearch('')
+    loadFolder(next[next.length - 1].id)
   }
 
   function toggleFile(id) {
@@ -437,11 +486,14 @@ function GoogleDriveView({ onBack }) {
     try {
       await axios.delete(`${API_BASE}/gdrive/disconnect`, { withCredentials: true })
       setStatus({ ...status, connected: false })
+      setFolders([])
       setFiles([])
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to disconnect')
     }
   }
+
+  const hasItems = folders.length > 0 || files.length > 0
 
   return (
     <>
@@ -472,21 +524,42 @@ function GoogleDriveView({ onBack }) {
                 ))}
               </Alert>
             )}
+
+            {/* Breadcrumb — hidden during search */}
+            {!search && (
+              <nav aria-label="folder breadcrumb" className="mb-2">
+                <ol className="breadcrumb mb-0 small">
+                  {folderStack.map((crumb, i) => (
+                    <li key={crumb.id} className={`breadcrumb-item${i === folderStack.length - 1 ? ' active' : ''}`}>
+                      {i < folderStack.length - 1
+                        ? <button className="btn btn-link p-0 text-decoration-none small" onClick={() => navigateTo(i)}>{crumb.name}</button>
+                        : crumb.name
+                      }
+                    </li>
+                  ))}
+                </ol>
+              </nav>
+            )}
+
             <Form onSubmit={handleSearch} className="mb-3">
               <InputGroup>
                 <Form.Control
-                  placeholder="Search files…"
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Search files across Drive…"
+                  value={searchInput}
+                  onChange={e => setSearchInput(e.target.value)}
                 />
-                <Button type="submit" variant="outline-secondary">Search</Button>
+                {search
+                  ? <Button variant="outline-secondary" onClick={clearSearch}>Clear</Button>
+                  : <Button type="submit" variant="outline-secondary">Search</Button>
+                }
               </InputGroup>
             </Form>
+
             {filesLoading && <div className="text-center py-3"><Spinner animation="border" size="sm" /></div>}
-            {!filesLoading && files.length === 0 && (
-              <p className="text-muted text-center py-2">No .xml, .json, or .zip files found.</p>
+            {!filesLoading && !hasItems && (
+              <p className="text-muted text-center py-2">{search ? `No files matching "${search}".` : 'This folder is empty.'}</p>
             )}
-            {!filesLoading && files.length > 0 && (
+            {!filesLoading && hasItems && (
               <div style={{ maxHeight: '320px', overflowY: 'auto' }}>
                 <table className="table table-sm table-hover mb-0">
                   <thead>
@@ -494,7 +567,10 @@ function GoogleDriveView({ onBack }) {
                       <th style={{ width: '2rem' }}>
                         <Form.Check
                           checked={selected.size === files.length && files.length > 0}
+                          indeterminate={selected.size > 0 && selected.size < files.length}
                           onChange={toggleAll}
+                          disabled={files.length === 0}
+                          title="Select all files"
                         />
                       </th>
                       <th>Name</th>
@@ -503,6 +579,21 @@ function GoogleDriveView({ onBack }) {
                     </tr>
                   </thead>
                   <tbody>
+                    {/* Folders first */}
+                    {!search && folders.map(f => (
+                      <tr key={f.id} onClick={() => enterFolder(f)} style={{ cursor: 'pointer' }} className="text-primary">
+                        <td />
+                        <td className="text-truncate" style={{ maxWidth: '280px' }}>
+                          <svg width="14" height="14" fill="currentColor" className="me-1 mb-1" viewBox="0 0 16 16">
+                            <path d="M.54 3.87.5 3a2 2 0 0 1 2-2h3.19a2 2 0 0 1 1.45.63l.33.38H14a2 2 0 0 1 2 2v6.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-1.99z"/>
+                          </svg>
+                          {f.name}
+                        </td>
+                        <td />
+                        <td className="text-end text-muted small">{f.modifiedTime ? formatDate(f.modifiedTime) : '—'}</td>
+                      </tr>
+                    ))}
+                    {/* Importable files */}
                     {files.map(f => (
                       <tr key={f.id} onClick={() => toggleFile(f.id)} style={{ cursor: 'pointer' }}>
                         <td><Form.Check checked={selected.has(f.id)} onChange={() => toggleFile(f.id)} onClick={e => e.stopPropagation()} /></td>
