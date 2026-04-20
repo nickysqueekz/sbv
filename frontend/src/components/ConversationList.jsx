@@ -182,7 +182,18 @@ function ConversationList({ conversations, selectedConversation, onSelectConvers
                   {truncateMessage(conv.last_message, 50)}
                 </p>
                 <div className="d-flex align-items-center gap-1 flex-wrap">
-                  {getActivityBadges(conv)}
+                  {(() => {
+                    const totalCalls = (conv.call_incoming||0) + (conv.call_outgoing||0) + (conv.call_missed||0) + (conv.call_voicemail||0) + (conv.call_rejected||0)
+                    const totalSMS   = (conv.sms_in||0) + (conv.sms_out||0)
+                    const totalMMS   = (conv.mms_in||0) + (conv.mms_out||0)
+                    const parts = []
+                    if (totalCalls > 0) parts.push(<Badge key="calls" label={`${totalCalls} call${totalCalls !== 1 ? 's' : ''}`} variant="success" />)
+                    if (totalSMS > 0)   parts.push(<Badge key="sms"   label={`${totalSMS} SMS`}   variant="primary" />)
+                    if (totalMMS > 0)   parts.push(<Badge key="mms"   label={`${totalMMS} MMS`}   variant="info" />)
+                    if (parts.length === 0 && conv.message_count > 0)
+                      parts.push(<Badge key="mc" label={`${conv.message_count} item${conv.message_count !== 1 ? 's' : ''}`} />)
+                    return parts
+                  })()}
                 </div>
               </div>
             </div>

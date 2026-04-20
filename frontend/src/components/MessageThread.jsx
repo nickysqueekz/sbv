@@ -461,10 +461,22 @@ function MessageThread({ conversation, startDate, endDate }) {
                 </div>
               )
             })()}
-            <div className="d-flex align-items-center gap-2">
-              <span className="badge bg-primary" style={{fontSize: '0.7rem'}}>
-                {items.length} {isCallLog ? 'call' : 'message'}{items.length !== 1 ? 's' : ''}
-              </span>
+            <div className="d-flex align-items-center gap-1 flex-wrap">
+              {(() => {
+                const c = conversation
+                const badges = []
+                if (c.sms_in > 0)         badges.push(<span key="si" className="badge bg-primary" style={{fontSize:'0.7rem'}}>{c.sms_in} SMS ↓</span>)
+                if (c.sms_out > 0)        badges.push(<span key="so" className="badge bg-primary" style={{fontSize:'0.7rem'}}>{c.sms_out} SMS ↑</span>)
+                if (c.mms_in > 0)         badges.push(<span key="mi" className="badge bg-info" style={{fontSize:'0.7rem'}}>{c.mms_in} MMS ↓</span>)
+                if (c.mms_out > 0)        badges.push(<span key="mo" className="badge bg-info" style={{fontSize:'0.7rem'}}>{c.mms_out} MMS ↑</span>)
+                if (c.call_incoming > 0)  badges.push(<span key="ci" className="badge bg-success" style={{fontSize:'0.7rem'}}>{c.call_incoming} ↓ call</span>)
+                if (c.call_outgoing > 0)  badges.push(<span key="co" className="badge bg-success" style={{fontSize:'0.7rem'}}>{c.call_outgoing} ↑ call</span>)
+                if (c.call_missed > 0)    badges.push(<span key="cm" className="badge bg-danger" style={{fontSize:'0.7rem'}}>{c.call_missed} missed</span>)
+                if (c.call_voicemail > 0) badges.push(<span key="cv" className="badge bg-warning text-dark" style={{fontSize:'0.7rem'}}>{c.call_voicemail} voicemail</span>)
+                if (c.call_rejected > 0)  badges.push(<span key="cr" className="badge bg-secondary" style={{fontSize:'0.7rem'}}>{c.call_rejected} rejected</span>)
+                if (badges.length === 0)  badges.push(<span key="mc" className="badge bg-primary" style={{fontSize:'0.7rem'}}>{items.length} {isCallLog ? 'call' : 'message'}{items.length !== 1 ? 's' : ''}</span>)
+                return badges
+              })()}
             </div>
           </div>
           <div className="d-flex gap-2">
