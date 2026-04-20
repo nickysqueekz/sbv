@@ -85,11 +85,15 @@ function BrowseView({ dir, onBack }) {
   const [sortDir, setSortDir] = useState('desc')
   const [importing, setImporting] = useState({})
   const [results, setResults] = useState({})
+  const [selected, setSelected] = useState(new Set())
+  const [bulkImporting, setBulkImporting] = useState(false)
+  const [bulkResult, setBulkResult] = useState(null)
   const PER_PAGE = 25
 
   const load = useCallback(async (p, s, sb, sd) => {
     setLoading(true)
     setError(null)
+    setSelected(new Set())
     try {
       const res = await axios.get(`${API_BASE}/watch-dirs/browse`, {
         params: { dir, page: p, per_page: PER_PAGE, search: s, sort: sb, sort_dir: sd },
@@ -124,7 +128,6 @@ function BrowseView({ dir, onBack }) {
     if (col === sortBy) {
       newDir = sortDir === 'asc' ? 'desc' : 'asc'
     } else {
-      // Default direction per column
       newDir = col === 'name' ? 'asc' : 'desc'
     }
     setSortBy(col)
@@ -138,6 +141,37 @@ function BrowseView({ dir, onBack }) {
     return <span className="ms-1" style={{fontSize:'0.8em'}}>{sortDir === 'asc' ? '↑' : '↓'}</span>
   }
 
+  // ── Selection helpers ──────────────────────────────────────────────────────
+  const importableFiles = files.filter(f => !f.queued)
+  const allImportableSelected = importableFiles.length > 0 && importableFiles.every(f => selected.has(f.path))
+  const someSelected = selected.size > 0
+
+  const toggleSelect = (path) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  const toggleAll = () => {
+    if (allImportableSelected) {
+      setSelected(prev => {
+        const next = new Set(prev)
+        importableFiles.forEach(f => next.delete(f.path))
+        return next
+      })
+    } else {
+      setSelected(prev => {
+        const next = new Set(prev)
+        importableFiles.forEach(f => next.add(f.path))
+        return next
+      })
+    }
+  }
+
+  // ── Single-file import ──────────────────────────────────────────────────────
   const handleImport = async (file) => {
     setImporting(prev => ({ ...prev, [file.path]: true }))
     try {
@@ -154,6 +188,29 @@ function BrowseView({ dir, onBack }) {
       }))
     } finally {
       setImporting(prev => ({ ...prev, [file.path]: false }))
+    }
+  }
+
+  // ── Bulk import ─────────────────────────────────────────────────────────────
+  const handleBulkImport = async () => {
+    setBulkImporting(true)
+    setBulkResult(null)
+    const paths = [...selected]
+    try {
+      const res = await axios.post(
+        `${API_BASE}/watch-dirs/import-batch`,
+        { paths },
+        { withCredentials: true }
+      )
+      setBulkResult({ success: true, message: res.data.message })
+      setSelected(new Set())
+      paths.forEach(path => {
+        setResults(prev => ({ ...prev, [path]: { success: true, message: '✓ Queued' } }))
+      })
+    } catch (err) {
+      setBulkResult({ success: false, message: err.response?.data?.error || 'Bulk import failed' })
+    } finally {
+      setBulkImporting(false)
     }
   }
 
@@ -192,6 +249,12 @@ function BrowseView({ dir, onBack }) {
           </InputGroup>
         </Form>
 
+        {bulkResult && (
+          <Alert variant={bulkResult.success ? 'success' : 'danger'} dismissible onClose={() => setBulkResult(null)}>
+            {bulkResult.message}
+          </Alert>
+        )}
+
         {loading && <div className="text-center py-3"><Spinner animation="border" size="sm" className="me-2" />Loading...</div>}
         {!loading && error && <Alert variant="danger">{error}</Alert>}
         {!loading && !error && files.length === 0 && (
@@ -202,6 +265,15 @@ function BrowseView({ dir, onBack }) {
           <table className="table table-sm table-hover align-middle mb-0">
             <thead className="table-light sticky-top">
               <tr>
+                <th style={{width: 32}}>
+                  <Form.Check
+                    type="checkbox"
+                    checked={allImportableSelected}
+                    onChange={toggleAll}
+                    title="Select all importable files on this page"
+                    disabled={importableFiles.length === 0}
+                  />
+                </th>
                 <th style={{cursor:'pointer'}} onClick={() => handleSort('name')}>Filename <SortArrow col="name" /></th>
                 <th className="text-end" style={{cursor:'pointer'}} onClick={() => handleSort('size')}>Size <SortArrow col="size" /></th>
                 <th style={{cursor:'pointer'}} onClick={() => handleSort('date')}>Date <SortArrow col="date" /></th>
@@ -212,22 +284,34 @@ function BrowseView({ dir, onBack }) {
               {files.map(file => {
                 const r = results[file.path]
                 const busy = importing[file.path]
+                const isQueued = file.queued || r?.success
+                const isImported = file.imported
                 return (
-                  <tr key={file.path}>
-                    <td className="text-truncate" style={{ maxWidth: 220 }} title={file.name}>
+                  <tr key={file.path} className={isQueued ? 'table-warning' : isImported ? 'table-success' : ''}>
+                    <td>
+                      <Form.Check
+                        type="checkbox"
+                        checked={selected.has(file.path)}
+                        onChange={() => toggleSelect(file.path)}
+                        disabled={isQueued}
+                      />
+                    </td>
+                    <td className="text-truncate" style={{ maxWidth: 200 }} title={file.name}>
                       {file.name}
-                      {r && <div className={`small ${r.success ? 'text-success' : 'text-danger'}`}>{r.message}</div>}
+                      {isQueued && <span className="badge bg-warning text-dark ms-1 small">⏳ Queued</span>}
+                      {!isQueued && isImported && <span className="badge bg-success ms-1 small">✓ Imported</span>}
+                      {r && !r.success && <div className="small text-danger">{r.message}</div>}
                     </td>
                     <td className="text-end text-nowrap text-muted small">{formatBytes(file.size)}</td>
                     <td className="text-nowrap text-muted small">{formatDate(file.modTime)}</td>
                     <td className="text-end">
                       <Button
                         size="sm"
-                        variant={r?.success ? 'success' : 'primary'}
-                        disabled={busy || r?.success}
+                        variant={isQueued ? 'success' : isImported ? 'outline-secondary' : 'primary'}
+                        disabled={busy || isQueued}
                         onClick={() => handleImport(file)}
                       >
-                        {busy ? <Spinner animation="border" size="sm" /> : r?.success ? '✓ Queued' : 'Import'}
+                        {busy ? <Spinner animation="border" size="sm" /> : isQueued ? '✓ Queued' : isImported ? 'Re-import' : 'Import'}
                       </Button>
                     </td>
                   </tr>
@@ -242,6 +326,19 @@ function BrowseView({ dir, onBack }) {
           {total > 0 && `${total.toLocaleString()} file${total !== 1 ? 's' : ''}${search ? ` matching "${search}"` : ''} — sorted by ${sortBy} ${sortDir === 'asc' ? '↑' : '↓'}`}
         </span>
         <div className="d-flex align-items-center gap-2">
+          {someSelected && (
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={bulkImporting}
+              onClick={handleBulkImport}
+            >
+              {bulkImporting
+                ? <><Spinner animation="border" size="sm" className="me-1" />Importing...</>
+                : `Import Selected (${selected.size})`
+              }
+            </Button>
+          )}
           {totalPages > 1 && (
             <Pagination size="sm" className="mb-0">
               <Pagination.Prev disabled={page === 1} onClick={() => handlePageChange(page - 1)} />

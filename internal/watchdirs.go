@@ -16,11 +16,13 @@ import (
 
 // WatchDirFile represents an XML file found in a watch directory
 type WatchDirFile struct {
-	Name    string    `json:"name"`
-	Path    string    `json:"path"`
-	Dir     string    `json:"dir"`
-	Size    int64     `json:"size"`
-	ModTime time.Time `json:"modTime"`
+	Name     string    `json:"name"`
+	Path     string    `json:"path"`
+	Dir      string    `json:"dir"`
+	Size     int64     `json:"size"`
+	ModTime  time.Time `json:"modTime"`
+	Imported bool      `json:"imported"` // true if this file is in the user's complete/ dir
+	Queued   bool      `json:"queued"`   // true if this file is currently in the user's ingest/ dir
 }
 
 // WatchDirSummary summarises the contents of one watch directory
@@ -106,112 +108,125 @@ func HandleListWatchDirs(c echo.Context) error {
 
 // HandleBrowseWatchDir returns a paginated, searchable list of XML files in a single watch directory.
 // Query params: dir (required), page (default 1), per_page (default 25, max 100), search (substring filter on filename)
-func HandleBrowseWatchDir(c echo.Context) error {
-	dir := c.QueryParam("dir")
-	if dir == "" {
-		return c.JSON(http.StatusBadRequest, map[string]string{"error": "dir is required"})
-	}
-
-	// Security: dir must be one of the configured watch dirs
-	watchDirs := GetWatchDirs()
-	allowed := false
-	for _, wd := range watchDirs {
-		absWd, _ := filepath.Abs(wd)
-		absDir, _ := filepath.Abs(dir)
-		if absDir == absWd {
-			allowed = true
-			break
+func HandleBrowseWatchDir(dataDir string) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		dir := c.QueryParam("dir")
+		if dir == "" {
+			return c.JSON(http.StatusBadRequest, map[string]string{"error": "dir is required"})
 		}
-	}
-	if !allowed {
-		return c.JSON(http.StatusForbidden, map[string]string{"error": "Directory is not a configured watch directory"})
-	}
 
-	search := strings.ToLower(c.QueryParam("search"))
-	sortBy := c.QueryParam("sort")     // name, size, date (default: date)
-	sortDir := c.QueryParam("sort_dir") // asc, desc (default: desc for date, asc for name/size)
-
-	page := 1
-	perPage := 25
-	if v := c.QueryParam("page"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			page = n
-		}
-	}
-	if v := c.QueryParam("per_page"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			if n > 100 {
-				n = 100
+		// Security: dir must be one of the configured watch dirs
+		watchDirs := GetWatchDirs()
+		allowed := false
+		for _, wd := range watchDirs {
+			absWd, _ := filepath.Abs(wd)
+			absDir, _ := filepath.Abs(dir)
+			if absDir == absWd {
+				allowed = true
+				break
 			}
-			perPage = n
 		}
-	}
-
-	allFiles, err := listXMLFiles(dir)
-	if err != nil {
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed to list directory: %v", err)})
-	}
-
-	// Filter by search term
-	var filtered []WatchDirFile
-	for _, f := range allFiles {
-		if search == "" || strings.Contains(strings.ToLower(f.Name), search) {
-			filtered = append(filtered, f)
+		if !allowed {
+			return c.JSON(http.StatusForbidden, map[string]string{"error": "Directory is not a configured watch directory"})
 		}
-	}
 
-	// Sort the filtered results
-	asc := sortDir == "asc"
-	switch sortBy {
-	case "name":
-		if !asc {
-			sort.Slice(filtered, func(i, j int) bool { return filtered[i].Name > filtered[j].Name })
-		} else {
-			sort.Slice(filtered, func(i, j int) bool { return filtered[i].Name < filtered[j].Name })
+		search := strings.ToLower(c.QueryParam("search"))
+		sortBy := c.QueryParam("sort")      // name, size, date (default: date)
+		sortDir := c.QueryParam("sort_dir") // asc, desc (default: desc for date, asc for name/size)
+
+		page := 1
+		perPage := 25
+		if v := c.QueryParam("page"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				page = n
+			}
 		}
-	case "size":
-		if asc {
-			sort.Slice(filtered, func(i, j int) bool { return filtered[i].Size < filtered[j].Size })
-		} else {
-			sort.Slice(filtered, func(i, j int) bool { return filtered[i].Size > filtered[j].Size })
+		if v := c.QueryParam("per_page"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				if n > 100 {
+					n = 100
+				}
+				perPage = n
+			}
 		}
-	default: // "date" — default desc (newest first)
-		if asc {
-			sort.Slice(filtered, func(i, j int) bool { return filtered[i].ModTime.Before(filtered[j].ModTime) })
-		} else {
-			sort.Slice(filtered, func(i, j int) bool { return filtered[i].ModTime.After(filtered[j].ModTime) })
+
+		allFiles, err := listXMLFiles(dir)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed to list directory: %v", err)})
 		}
-	}
 
-	total := len(filtered)
-	totalPages := (total + perPage - 1) / perPage
-	if totalPages == 0 {
-		totalPages = 1
-	}
-	if page > totalPages {
-		page = totalPages
-	}
-	start := (page - 1) * perPage
-	end := start + perPage
-	if end > total {
-		end = total
-	}
+		// Filter by search term
+		var filtered []WatchDirFile
+		for _, f := range allFiles {
+			if search == "" || strings.Contains(strings.ToLower(f.Name), search) {
+				filtered = append(filtered, f)
+			}
+		}
 
-	var pageFiles []WatchDirFile
-	if start < total {
-		pageFiles = filtered[start:end]
-	}
+		// Sort the filtered results
+		asc := sortDir == "asc"
+		switch sortBy {
+		case "name":
+			if !asc {
+				sort.Slice(filtered, func(i, j int) bool { return filtered[i].Name > filtered[j].Name })
+			} else {
+				sort.Slice(filtered, func(i, j int) bool { return filtered[i].Name < filtered[j].Name })
+			}
+		case "size":
+			if asc {
+				sort.Slice(filtered, func(i, j int) bool { return filtered[i].Size < filtered[j].Size })
+			} else {
+				sort.Slice(filtered, func(i, j int) bool { return filtered[i].Size > filtered[j].Size })
+			}
+		default: // "date" — default desc (newest first)
+			if asc {
+				sort.Slice(filtered, func(i, j int) bool { return filtered[i].ModTime.Before(filtered[j].ModTime) })
+			} else {
+				sort.Slice(filtered, func(i, j int) bool { return filtered[i].ModTime.After(filtered[j].ModTime) })
+			}
+		}
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"dir":         dir,
-		"page":        page,
-		"per_page":    perPage,
-		"total":       total,
-		"total_pages": totalPages,
-		"sort":        sortBy,
-		"sort_dir":    sortDir,
-		"files":       pageFiles,
-	})
+		total := len(filtered)
+		totalPages := (total + perPage - 1) / perPage
+		if totalPages == 0 {
+			totalPages = 1
+		}
+		if page > totalPages {
+			page = totalPages
+		}
+		start := (page - 1) * perPage
+		end := start + perPage
+		if end > total {
+			end = total
+		}
+
+		var pageFiles []WatchDirFile
+		if start < total {
+			pageFiles = filtered[start:end]
+		}
+
+		// Mark imported/queued status for files on this page
+		userID, _ := c.Get("user_id").(string)
+		if userID != "" {
+			completeSet := loadFilenameSet(filepath.Join(dataDir, userID, "complete"))
+			ingestSet := loadFilenameSet(filepath.Join(dataDir, userID, "ingest"))
+			for i := range pageFiles {
+				pageFiles[i].Imported = completeSet[pageFiles[i].Name]
+				pageFiles[i].Queued = ingestSet[pageFiles[i].Name]
+			}
+		}
+
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"dir":         dir,
+			"page":        page,
+			"per_page":    perPage,
+			"total":       total,
+			"total_pages": totalPages,
+			"sort":        sortBy,
+			"sort_dir":    sortDir,
+			"files":       pageFiles,
+		})
+	}
 }
 
 // HandleImportWatchDir queues a file from a watch directory into the current user's ingest directory
@@ -376,4 +391,89 @@ func HandleImportAllWatchDirs(dataDir string) echo.HandlerFunc {
 			"errors":  errs,
 		})
 	}
+}
+
+// loadFilenameSet returns a set of base filenames present in the given directory.
+// Returns an empty set if the directory does not exist or cannot be read.
+func loadFilenameSet(dir string) map[string]bool {
+set := make(map[string]bool)
+entries, err := os.ReadDir(dir)
+if err != nil {
+return set
+}
+for _, e := range entries {
+if !e.IsDir() {
+set[e.Name()] = true
+}
+}
+return set
+}
+
+// HandleImportBatchWatchDir queues multiple files from watch directories into the user's ingest directory.
+func HandleImportBatchWatchDir(dataDir string) echo.HandlerFunc {
+return func(c echo.Context) error {
+var req struct {
+Paths []string `json:"paths"`
+}
+if err := c.Bind(&req); err != nil {
+return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request body"})
+}
+if len(req.Paths) == 0 {
+return c.JSON(http.StatusBadRequest, map[string]string{"error": "paths is required"})
+}
+
+userID, ok := c.Get("user_id").(string)
+if !ok || userID == "" {
+return c.JSON(http.StatusUnauthorized, map[string]string{"error": "User not authenticated"})
+}
+
+watchDirs := GetWatchDirs()
+ingestDir := filepath.Join(dataDir, userID, "ingest")
+if err := os.MkdirAll(ingestDir, 0755); err != nil {
+return c.JSON(http.StatusInternalServerError, map[string]string{
+"error": fmt.Sprintf("Failed to create ingest directory: %v", err),
+})
+}
+
+queued := 0
+skipped := 0
+var errs []string
+
+for _, path := range req.Paths {
+allowed := false
+for _, dir := range watchDirs {
+absDir, _ := filepath.Abs(dir)
+absPath, _ := filepath.Abs(path)
+if strings.HasPrefix(absPath, absDir+string(os.PathSeparator)) {
+allowed = true
+break
+}
+}
+if !allowed || !strings.HasSuffix(strings.ToLower(path), ".xml") {
+errs = append(errs, fmt.Sprintf("%s: not allowed", filepath.Base(path)))
+continue
+}
+destPath := filepath.Join(ingestDir, filepath.Base(path))
+if _, err := os.Stat(destPath); err == nil {
+skipped++
+continue
+}
+if err := copyToIngest(path, ingestDir); err != nil {
+errs = append(errs, fmt.Sprintf("%s: %v", filepath.Base(path), err))
+} else {
+queued++
+}
+}
+
+msg := fmt.Sprintf("Queued %d files for import", queued)
+if skipped > 0 {
+msg += fmt.Sprintf(" (%d already queued, skipped)", skipped)
+}
+return c.JSON(http.StatusOK, map[string]interface{}{
+"message": msg,
+"queued":  queued,
+"skipped": skipped,
+"errors":  errs,
+})
+}
 }
