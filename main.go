@@ -111,6 +111,7 @@ func main() {
 	protected.PUT("/settings", internal.HandleUpdateSettings)
 	protected.GET("/analytics", internal.HandleAnalytics)
 	protected.GET("/watch-dirs", internal.HandleListWatchDirs)
+	protected.GET("/watch-dirs/browse", internal.HandleBrowseWatchDir)
 
 	// Health check
 	e.GET("/api/health", func(c echo.Context) error {

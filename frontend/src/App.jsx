@@ -442,10 +442,6 @@ function App() {
       {showWatchDirs && (
         <WatchDirs
           onClose={() => setShowWatchDirs(false)}
-          onSuccess={() => {
-            setShowWatchDirs(false)
-            fetchConversations()
-          }}
         />
       )}
 

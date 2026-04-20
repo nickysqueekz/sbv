@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,6 +101,94 @@ func HandleListWatchDirs(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"watch_dirs": summaries,
+	})
+}
+
+// HandleBrowseWatchDir returns a paginated, searchable list of XML files in a single watch directory.
+// Query params: dir (required), page (default 1), per_page (default 25, max 100), search (substring filter on filename)
+func HandleBrowseWatchDir(c echo.Context) error {
+	dir := c.QueryParam("dir")
+	if dir == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "dir is required"})
+	}
+
+	// Security: dir must be one of the configured watch dirs
+	watchDirs := GetWatchDirs()
+	allowed := false
+	for _, wd := range watchDirs {
+		absWd, _ := filepath.Abs(wd)
+		absDir, _ := filepath.Abs(dir)
+		if absDir == absWd {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return c.JSON(http.StatusForbidden, map[string]string{"error": "Directory is not a configured watch directory"})
+	}
+
+	search := strings.ToLower(c.QueryParam("search"))
+
+	page := 1
+	perPage := 25
+	if v := c.QueryParam("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if v := c.QueryParam("per_page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			if n > 100 {
+				n = 100
+			}
+			perPage = n
+		}
+	}
+
+	allFiles, err := listXMLFiles(dir)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("Failed to list directory: %v", err)})
+	}
+
+	// Filter by search term
+	var filtered []WatchDirFile
+	for _, f := range allFiles {
+		if search == "" || strings.Contains(strings.ToLower(f.Name), search) {
+			filtered = append(filtered, f)
+		}
+	}
+
+	// Sort newest first
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].ModTime.After(filtered[j].ModTime)
+	})
+
+	total := len(filtered)
+	totalPages := (total + perPage - 1) / perPage
+	if totalPages == 0 {
+		totalPages = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	start := (page - 1) * perPage
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+
+	var pageFiles []WatchDirFile
+	if start < total {
+		pageFiles = filtered[start:end]
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"dir":         dir,
+		"page":        page,
+		"per_page":    perPage,
+		"total":       total,
+		"total_pages": totalPages,
+		"files":       pageFiles,
 	})
 }
 
