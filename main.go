@@ -42,6 +42,15 @@ func main() {
 	}
 	authDBPath := dbPathPrefix + "/sbv.db"
 
+	// Optional: PostgreSQL mode when DATABASE_URL is set
+	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+		if err := internal.InitPG(dsn); err != nil {
+			logger.Error("Failed to connect to PostgreSQL", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("PostgreSQL mode enabled")
+	}
+
 	err := internal.InitAuthDB(authDBPath)
 	if err != nil {
 		logger.Error("Failed to initialize authentication database", "error", err)
@@ -149,6 +158,14 @@ func main() {
 	protected.POST("/watch-dirs/import-batch", internal.HandleImportBatchWatchDir(dataDir))
 	protected.GET("/queue-status", internal.HandleQueueStatus(dataDir))
 	protected.POST("/watch-dirs/import-all", internal.HandleImportAllWatchDirs(dataDir))
+
+	// Google Drive routes
+	protected.GET("/gdrive/status", internal.HandleGDriveStatus)
+	protected.GET("/gdrive/auth", internal.HandleGDriveAuth)
+	protected.GET("/gdrive/files", internal.HandleGDriveFiles)
+	protected.POST("/gdrive/import", internal.HandleGDriveImport(dataDir))
+	protected.DELETE("/gdrive/disconnect", internal.HandleGDriveDisconnect)
+	e.GET("/api/gdrive/callback", internal.HandleGDriveCallback)
 	autoImportService := internal.NewAutoImportService(dataDir)
 	autoImportService.Start()
 	defer autoImportService.Stop()

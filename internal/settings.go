@@ -33,7 +33,7 @@ func GetUserSettings(userID string) (Settings, error) {
 	var settingsJSON string
 	var updatedAt int64
 
-	err := authDB.QueryRow(
+	err := queryRowDB(authDB, 
 		"SELECT settings_json, updated_at FROM settings WHERE user_id = ?",
 		userID,
 	).Scan(&settingsJSON, &updatedAt)
@@ -64,7 +64,7 @@ func SaveUserSettings(userID string, settings Settings) error {
 
 	now := time.Now().Unix()
 
-	_, err = authDB.Exec(`
+	_, err = execDB(authDB, `
 		INSERT INTO settings (user_id, settings_json, updated_at)
 		VALUES (?, ?, ?)
 		ON CONFLICT(user_id) DO UPDATE SET

@@ -32,12 +32,12 @@ RUN apk add --no-cache \
 # Copy go mod files
 COPY go.mod go.sum ./
 
-# Download dependencies
-RUN go mod download
-
 # Copy backend source
 COPY *.go ./
 COPY internal/*.go internal/
+
+# Tidy and download dependencies (updates go.sum for any new deps)
+RUN go mod tidy && go mod download
 
 # Build with FTS5 support
 # Use CGO for SQLite and libheif

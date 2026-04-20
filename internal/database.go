@@ -160,6 +160,31 @@ func InitDB(filepath string) error {
 
 // InitUserDB initializes a database for a specific user
 func InitUserDB(userID string, filepath string) error {
+	if pgMode {
+		schema := pgUserSchema(userID)
+		// Create schema using a public-schema connection
+		adminDB, err := openPGConn("public")
+		if err != nil {
+			return fmt.Errorf("postgres: open admin: %w", err)
+		}
+		defer adminDB.Close()
+		if _, err := adminDB.Exec("CREATE SCHEMA IF NOT EXISTS " + schema); err != nil {
+			return fmt.Errorf("postgres: create schema %s: %w", schema, err)
+		}
+		userConn, err := openPGConn(schema)
+		if err != nil {
+			return fmt.Errorf("postgres: open user conn: %w", err)
+		}
+		if _, err := userConn.Exec(pgMessagesDDL); err != nil {
+			userConn.Close()
+			return fmt.Errorf("postgres: create messages table: %w", err)
+		}
+		userDBsMutex.Lock()
+		userDBs[userID] = userConn
+		userDBsMutex.Unlock()
+		return nil
+	}
+
 	userDB, err := sql.Open("sqlite3", filepath)
 	if err != nil {
 		return err
@@ -275,17 +300,21 @@ func GetUserDB(userID string, username string) (*sql.DB, error) {
 	userDBsMutex.RUnlock()
 
 	if !exists {
-		// Database not in cache, try to open or create it
-		dbPathPrefix := os.Getenv("DB_PATH_PREFIX")
-		if dbPathPrefix == "" {
-			dbPathPrefix = "."
-		}
-		// Use UUID as database filename instead of sanitized username
-		filepath := fmt.Sprintf("%s/sbv_%s.db", dbPathPrefix, userID)
-
-		// InitUserDB will create the database if it doesn't exist
-		if err := InitUserDB(userID, filepath); err != nil {
-			return nil, fmt.Errorf("failed to initialize user database: %w", err)
+		if pgMode {
+			// PostgreSQL: create schema + tables, return per-user schema connection
+			if err := InitUserDB(userID, ""); err != nil {
+				return nil, fmt.Errorf("failed to initialize user database: %w", err)
+			}
+		} else {
+			// SQLite: open or create per-user .db file
+			dbPathPrefix := os.Getenv("DB_PATH_PREFIX")
+			if dbPathPrefix == "" {
+				dbPathPrefix = "."
+			}
+			filepath := fmt.Sprintf("%s/sbv_%s.db", dbPathPrefix, userID)
+			if err := InitUserDB(userID, filepath); err != nil {
+				return nil, fmt.Errorf("failed to initialize user database: %w", err)
+			}
 		}
 
 		userDBsMutex.RLock()
@@ -321,43 +350,59 @@ func InsertMessage(userDB *sql.DB, msg *Message) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT DO NOTHING
 	`
-	result, err := userDB.Exec(query,
-		recordType, // record_type: 1 = SMS, 2 = MMS
-		msg.Address,
-		msg.Body,
-		msg.Type,
-		msg.Date.Unix(),
-		msg.Read,
-		msg.ThreadID,
-		msg.Subject,
-		msg.MediaType,
-		msg.MediaData,
-		msg.Protocol,
-		msg.Status,
-		msg.ServiceCenter,
-		msg.SubID,
-		msg.ContactName,
-		msg.Sender,
-		msg.ContentType,
-		msg.ReadReport,
-		msg.ReadStatus,
-		msg.MessageID,
-		msg.MessageSize,
-		msg.MessageType,
-		msg.SimSlot,
-		addressesJSON,
-	)
-	if err != nil {
-		slog.Debug("InsertMessage: Error inserting message", "error", err)
-		return err
-	}
+msgArgs := []interface{}{
+                recordType,
+                msg.Address,
+                msg.Body,
+                msg.Type,
+                msg.Date.Unix(),
+                msg.Read,
+                msg.ThreadID,
+                msg.Subject,
+                msg.MediaType,
+                msg.MediaData,
+                msg.Protocol,
+                msg.Status,
+                msg.ServiceCenter,
+                msg.SubID,
+                msg.ContactName,
+                msg.Sender,
+                msg.ContentType,
+                msg.ReadReport,
+                msg.ReadStatus,
+                msg.MessageID,
+                msg.MessageSize,
+                msg.MessageType,
+                msg.SimSlot,
+                addressesJSON,
+        }
 
-	id, err := result.LastInsertId()
-	if err != nil {
-		return err
-	}
-	msg.ID = id
+        if pgMode {
+                pgQuery := query + " RETURNING id"
+                var newID int64
+                scanErr := queryRowDB(userDB, pgQuery, msgArgs...).Scan(&newID)
+                if scanErr == sql.ErrNoRows {
+                        msg.ID = 0
+                        return nil
+                }
+                if scanErr != nil {
+                        slog.Debug("InsertMessage: Error inserting message", "error", scanErr)
+                        return scanErr
+                }
+                msg.ID = newID
+                return nil
+        }
 
+        result, err := execDB(userDB, query, msgArgs...)
+        if err != nil {
+                slog.Debug("InsertMessage: Error inserting message", "error", err)
+                return err
+        }
+        id, err := result.LastInsertId()
+        if err != nil {
+                return err
+        }
+        msg.ID = id
 	return nil
 }
 
@@ -367,20 +412,36 @@ func InsertCallLog(userDB *sql.DB, call *CallLog) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT DO NOTHING
 	`
-	result, err := userDB.Exec(query,
-		3, // record_type: 3 = call
-		call.Number,
-		call.Type,
-		call.Date.Unix(),
-		call.Duration,
-		call.Presentation,
-		call.SubscriptionID,
-		call.ContactName,
-	)
-	if err != nil {
-		return err
-	}
+callArgs := []interface{}{
+                3,
+                call.Number,
+                call.Type,
+                call.Date.Unix(),
+                call.Duration,
+                call.Presentation,
+                call.SubscriptionID,
+                call.ContactName,
+        }
 
+        if pgMode {
+                pgQuery := query + " RETURNING id"
+                var newID int64
+                scanErr := queryRowDB(userDB, pgQuery, callArgs...).Scan(&newID)
+                if scanErr == sql.ErrNoRows {
+                        call.ID = 0
+                        return nil
+                }
+                if scanErr != nil {
+                        return scanErr
+                }
+                call.ID = newID
+                return nil
+        }
+
+        result, err := execDB(userDB, query, callArgs...)
+        if err != nil {
+                return err
+        }
 	id, err := result.LastInsertId()
 	if err != nil {
 		return err
@@ -401,7 +462,7 @@ func InsertCallLogBatch(userDB *sql.DB, calls []CallLog) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`
+	stmt, err := prepareTx(tx, `
 		INSERT INTO messages (record_type, address, type, date, duration, presentation, subscription_id, contact_name)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT DO NOTHING
@@ -493,7 +554,7 @@ func GetConversations(userDB *sql.DB, startDate, endDate *time.Time) ([]Conversa
 		ORDER BY last_date DESC
 	`
 
-	rows, err := userDB.Query(query, args...)
+	rows, err := queryDB(userDB, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -569,7 +630,7 @@ func GetMessages(userDB *sql.DB, address string, startDate, endDate *time.Time) 
 	slog.Debug("GetMessages: SQL query", "query", query)
 	slog.Debug("GetMessages: query arguments", "args", args)
 
-	rows, err := userDB.Query(query, args...)
+	rows, err := queryDB(userDB, query, args...)
 	if err != nil {
 		slog.Debug("GetMessages: Query error", "error", err)
 		return nil, err
@@ -631,7 +692,7 @@ func GetCallLogs(userDB *sql.DB, number string, startDate, endDate *time.Time) (
 
 	query += " ORDER BY date ASC"
 
-	rows, err := userDB.Query(query, args...)
+	rows, err := queryDB(userDB, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -674,7 +735,7 @@ func GetAllCalls(userDB *sql.DB, startDate, endDate *time.Time, limit, offset in
 	query += " ORDER BY date ASC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
 
-	rows, err := userDB.Query(query, args...)
+	rows, err := queryDB(userDB, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -739,7 +800,7 @@ func GetActivityByAddress(userDB *sql.DB, address string, startDate, endDate *ti
 	slog.Debug("GetActivityByAddress: SQL query", "query", query)
 	slog.Debug("GetActivityByAddress: query arguments", "args", args)
 
-	rows, err := userDB.Query(query, args...)
+	rows, err := queryDB(userDB, query, args...)
 	if err != nil {
 		slog.Debug("GetActivityByAddress: Query error", "error", err)
 		return nil, err
@@ -894,7 +955,7 @@ func GetMediaByAddress(userDB *sql.DB, address string, startDate, endDate *time.
 
 	query += " ORDER BY date DESC"
 
-	rows, err := userDB.Query(query, args...)
+	rows, err := queryDB(userDB, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -933,7 +994,7 @@ func GetMessageMedia(userDB *sql.DB, messageID string) ([]byte, string, error) {
 	var mediaData []byte
 	var mediaType string
 
-	err := userDB.QueryRow(query, messageID).Scan(&mediaData, &mediaType)
+	err := queryRowDB(userDB, query, messageID).Scan(&mediaData, &mediaType)
 	if err != nil {
 		slog.Debug("GetMessageMedia: Error scanning row", "message_id", messageID, "error", err)
 		return nil, "", err
@@ -991,7 +1052,7 @@ func GetDateRange(userDB *sql.DB) (time.Time, time.Time, error) {
 	// Get min/max from unified messages table
 	query := "SELECT MIN(date), MAX(date) FROM messages"
 	var min, max sql.NullInt64
-	err := userDB.QueryRow(query).Scan(&min, &max)
+	err := queryRowDB(userDB, query).Scan(&min, &max)
 	if err != nil && err != sql.ErrNoRows {
 		return time.Time{}, time.Time{}, err
 	}
@@ -1022,22 +1083,41 @@ func SearchMessages(userDB *sql.DB, query string, limit int) ([]SearchResult, er
 		return []SearchResult{}, nil
 	}
 
-	sqlQuery := `
-		SELECT
-			m.id,
-			m.address,
-			COALESCE(m.contact_name, ''),
-			m.body,
-			m.date,
-			snippet(messages_fts, 2, '<mark>', '</mark>', '...', 50) as snippet
-		FROM messages_fts
-		JOIN messages m ON messages_fts.rowid = m.id
-		WHERE messages_fts MATCH ?
-		ORDER BY rank
-		LIMIT ?
-	`
+	var rows *sql.Rows
+	var err error
 
-	rows, err := userDB.Query(sqlQuery, query, limit)
+	if pgMode {
+		pgQuery := `
+			SELECT
+				m.id,
+				m.address,
+				COALESCE(m.contact_name, ''),
+				m.body,
+				m.date,
+				ts_headline('english', COALESCE(m.body,''), plainto_tsquery('english', ?)) as snippet
+			FROM messages m
+			WHERE m.body_tsv @@ plainto_tsquery('english', ?)
+			ORDER BY m.date DESC
+			LIMIT ?
+		`
+		rows, err = queryDB(userDB, pgQuery, query, query, limit)
+	} else {
+		sqlQuery := `
+			SELECT
+				m.id,
+				m.address,
+				COALESCE(m.contact_name, ''),
+				m.body,
+				m.date,
+				snippet(messages_fts, 2, '<mark>', '</mark>', '...', 50) as snippet
+			FROM messages_fts
+			JOIN messages m ON messages_fts.rowid = m.id
+			WHERE messages_fts MATCH ?
+			ORDER BY rank
+			LIMIT ?
+		`
+		rows, err = queryDB(userDB, sqlQuery, query, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1120,7 +1200,7 @@ func getSummaryStats(userDB *sql.DB, dateFilter string, args []interface{}, anal
 		FROM messages
 		WHERE 1=1 ` + dateFilter
 
-	return userDB.QueryRow(query, args...).Scan(
+	return queryRowDB(userDB, query, args...).Scan(
 		&analytics.TotalMessages,
 		&analytics.TotalSMS,
 		&analytics.TotalMMS,
@@ -1150,7 +1230,7 @@ func getTopContacts(userDB *sql.DB, dateFilter string, args []interface{}, limit
 		LIMIT ?`
 
 	queryArgs := append(args, limit)
-	rows, err := userDB.Query(query, queryArgs...)
+	rows, err := queryDB(userDB, query, queryArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -1168,17 +1248,32 @@ func getTopContacts(userDB *sql.DB, dateFilter string, args []interface{}, limit
 }
 
 func getHourlyDistribution(userDB *sql.DB, dateFilter string, args []interface{}, tzOffsetMinutes int) ([]HourlyDistribution, error) {
-	tzModifier := fmt.Sprintf("%+d minutes", tzOffsetMinutes)
-	query := `
-		SELECT
-			CAST(strftime('%H', date, 'unixepoch', '` + tzModifier + `') AS INTEGER) as hour,
-			COUNT(*) as count
-		FROM messages
-		WHERE record_type IN (1, 2) ` + dateFilter + `
-		GROUP BY hour
-		ORDER BY hour`
+	var rows *sql.Rows
+	var err error
 
-	rows, err := userDB.Query(query, args...)
+	if pgMode {
+		pgQuery := `
+			SELECT
+				EXTRACT(HOUR FROM to_timestamp(date + ? * 60))::int as hour,
+				COUNT(*) as count
+			FROM messages
+			WHERE record_type IN (1, 2) ` + dateFilter + `
+			GROUP BY hour
+			ORDER BY hour`
+		pgArgs := append([]interface{}{tzOffsetMinutes}, args...)
+		rows, err = queryDB(userDB, pgQuery, pgArgs...)
+	} else {
+		tzModifier := fmt.Sprintf("%+d minutes", tzOffsetMinutes)
+		query := `
+			SELECT
+				CAST(strftime('%H', date, 'unixepoch', '` + tzModifier + `') AS INTEGER) as hour,
+				COUNT(*) as count
+			FROM messages
+			WHERE record_type IN (1, 2) ` + dateFilter + `
+			GROUP BY hour
+			ORDER BY hour`
+		rows, err = queryDB(userDB, query, args...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1207,16 +1302,30 @@ func getHourlyDistribution(userDB *sql.DB, dateFilter string, args []interface{}
 }
 
 func getDailyTrend(userDB *sql.DB, dateFilter string, args []interface{}) ([]DailyCount, error) {
-	query := `
-		SELECT
-			strftime('%Y-%m-%d', date, 'unixepoch', 'localtime') as day,
-			COUNT(*) as count
-		FROM messages
-		WHERE record_type IN (1, 2) ` + dateFilter + `
-		GROUP BY day
-		ORDER BY day`
+	var rows *sql.Rows
+	var err error
 
-	rows, err := userDB.Query(query, args...)
+	if pgMode {
+		pgQuery := `
+			SELECT
+				TO_CHAR(to_timestamp(date), 'YYYY-MM-DD') as day,
+				COUNT(*) as count
+			FROM messages
+			WHERE record_type IN (1, 2) ` + dateFilter + `
+			GROUP BY day
+			ORDER BY day`
+		rows, err = queryDB(userDB, pgQuery, args...)
+	} else {
+		query := `
+			SELECT
+				strftime('%Y-%m-%d', date, 'unixepoch', 'localtime') as day,
+				COUNT(*) as count
+			FROM messages
+			WHERE record_type IN (1, 2) ` + dateFilter + `
+			GROUP BY day
+			ORDER BY day`
+		rows, err = queryDB(userDB, query, args...)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -20,7 +20,7 @@ function formatDate(dateStr) {
 
 // ── Summary view ─────────────────────────────────────────────────────────────
 
-function SummaryView({ onClose, onBrowse }) {
+function SummaryView({ onClose, onBrowse, onGDrive }) {
   const [summaries, setSummaries] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -64,6 +64,7 @@ function SummaryView({ onClose, onBrowse }) {
         )}
       </Modal.Body>
       <Modal.Footer>
+        <Button variant="outline-primary" size="sm" onClick={onGDrive}>Google Drive</Button>
         <Button variant="secondary" onClick={onClose}>Close</Button>
       </Modal.Footer>
     </>
@@ -361,16 +362,194 @@ function BrowseView({ dir, onBack }) {
   )
 }
 
+// ── Google Drive view ─────────────────────────────────────────────────────────
+
+function GoogleDriveView({ onBack }) {
+  const [status, setStatus] = useState(null)  // {configured, connected}
+  const [files, setFiles] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [filesLoading, setFilesLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState(new Set())
+  const [importing, setImporting] = useState(false)
+  const [importResults, setImportResults] = useState([])
+
+  useEffect(() => {
+    axios.get(`${API_BASE}/gdrive/status`, { withCredentials: true })
+      .then(res => {
+        setStatus(res.data)
+        if (res.data.connected) loadFiles('')
+      })
+      .catch(err => setError(err.response?.data?.error || 'Failed to get Drive status'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  function loadFiles(q) {
+    setFilesLoading(true)
+    setError(null)
+    axios.get(`${API_BASE}/gdrive/files`, { params: { q }, withCredentials: true })
+      .then(res => { setFiles(res.data || []); setSelected(new Set()) })
+      .catch(err => setError(err.response?.data?.error || 'Failed to list Drive files'))
+      .finally(() => setFilesLoading(false))
+  }
+
+  function handleSearch(e) {
+    e.preventDefault()
+    loadFiles(search.trim())
+  }
+
+  function toggleFile(id) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  function toggleAll() {
+    if (selected.size === files.length) {
+      setSelected(new Set())
+    } else {
+      setSelected(new Set(files.map(f => f.id)))
+    }
+  }
+
+  async function handleImport() {
+    setImporting(true)
+    setImportResults([])
+    const toImport = files.filter(f => selected.has(f.id))
+    const results = []
+    for (const f of toImport) {
+      try {
+        await axios.post(`${API_BASE}/gdrive/import`, { file_id: f.id, filename: f.name }, { withCredentials: true })
+        results.push({ name: f.name, ok: true })
+      } catch (err) {
+        results.push({ name: f.name, ok: false, error: err.response?.data?.error || 'Failed' })
+      }
+    }
+    setImportResults(results)
+    setImporting(false)
+    setSelected(new Set())
+  }
+
+  async function handleDisconnect() {
+    try {
+      await axios.delete(`${API_BASE}/gdrive/disconnect`, { withCredentials: true })
+      setStatus({ ...status, connected: false })
+      setFiles([])
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to disconnect')
+    }
+  }
+
+  return (
+    <>
+      <Modal.Header closeButton>
+        <Modal.Title>Google Drive</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        {loading && <div className="text-center py-4"><Spinner animation="border" size="sm" className="me-2" />Checking connection...</div>}
+        {!loading && error && <Alert variant="danger">{error}</Alert>}
+        {!loading && status && !status.configured && (
+          <Alert variant="warning">
+            Google Drive is not configured. Set <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>,
+            and <code>APP_BASE_URL</code> environment variables.
+          </Alert>
+        )}
+        {!loading && status?.configured && !status.connected && (
+          <div className="text-center py-3">
+            <p className="text-muted mb-3">Connect your Google account to browse and import backup files from Drive.</p>
+            <Button href={`${API_BASE}/gdrive/auth`} variant="primary">Connect Google Drive</Button>
+          </div>
+        )}
+        {!loading && status?.connected && (
+          <>
+            {importResults.length > 0 && (
+              <Alert variant={importResults.every(r => r.ok) ? 'success' : 'warning'} className="mb-3">
+                {importResults.map((r, i) => (
+                  <div key={i}>{r.ok ? '✓' : '✗'} {r.name}{!r.ok && ` — ${r.error}`}</div>
+                ))}
+              </Alert>
+            )}
+            <Form onSubmit={handleSearch} className="mb-3">
+              <InputGroup>
+                <Form.Control
+                  placeholder="Search files…"
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                />
+                <Button type="submit" variant="outline-secondary">Search</Button>
+              </InputGroup>
+            </Form>
+            {filesLoading && <div className="text-center py-3"><Spinner animation="border" size="sm" /></div>}
+            {!filesLoading && files.length === 0 && (
+              <p className="text-muted text-center py-2">No .xml, .json, or .zip files found.</p>
+            )}
+            {!filesLoading && files.length > 0 && (
+              <div style={{ maxHeight: '320px', overflowY: 'auto' }}>
+                <table className="table table-sm table-hover mb-0">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '2rem' }}>
+                        <Form.Check
+                          checked={selected.size === files.length && files.length > 0}
+                          onChange={toggleAll}
+                        />
+                      </th>
+                      <th>Name</th>
+                      <th className="text-end">Size</th>
+                      <th className="text-end">Modified</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {files.map(f => (
+                      <tr key={f.id} onClick={() => toggleFile(f.id)} style={{ cursor: 'pointer' }}>
+                        <td><Form.Check checked={selected.has(f.id)} onChange={() => toggleFile(f.id)} onClick={e => e.stopPropagation()} /></td>
+                        <td className="text-truncate" style={{ maxWidth: '280px' }}>{f.name}</td>
+                        <td className="text-end text-muted small">{formatBytes(parseInt(f.size || 0))}</td>
+                        <td className="text-end text-muted small">{f.modifiedTime ? formatDate(f.modifiedTime) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        )}
+      </Modal.Body>
+      <Modal.Footer className="d-flex justify-content-between">
+        <div>
+          {status?.connected && (
+            <Button variant="outline-danger" size="sm" onClick={handleDisconnect}>Disconnect</Button>
+          )}
+        </div>
+        <div className="d-flex gap-2">
+          {status?.connected && selected.size > 0 && (
+            <Button size="sm" onClick={handleImport} disabled={importing}>
+              {importing ? <><Spinner size="sm" className="me-1" />Importing…</> : `Import ${selected.size} file${selected.size !== 1 ? 's' : ''}`}
+            </Button>
+          )}
+          <Button variant="secondary" size="sm" onClick={onBack}>Back</Button>
+        </div>
+      </Modal.Footer>
+    </>
+  )
+}
+
 // ── Root component ────────────────────────────────────────────────────────────
 
 function WatchDirs({ onClose }) {
   const [browseDir, setBrowseDir] = useState(null)
+  const [showGDrive, setShowGDrive] = useState(false)
 
   return (
     <Modal show onHide={onClose} size="lg" centered>
       {browseDir
         ? <BrowseView dir={browseDir} onBack={() => setBrowseDir(null)} />
-        : <SummaryView onClose={onClose} onBrowse={dir => setBrowseDir(dir)} />
+        : showGDrive
+          ? <GoogleDriveView onBack={() => setShowGDrive(false)} />
+          : <SummaryView onClose={onClose} onBrowse={dir => setBrowseDir(dir)} onGDrive={() => setShowGDrive(true)} />
       }
     </Modal>
   )
