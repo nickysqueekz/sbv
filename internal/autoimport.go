@@ -180,8 +180,7 @@ func (s *AutoImportService) processFile(userID, filePath, filename string) {
                         logWriter.log("ERROR: Unrecognized JSON format (expected Telegram or Google Chat export)")
                         slog.Warn("Unrecognized JSON format", "userID", userID, "file", filename)
                         return
-                }
-
+                }        }
 	// Move file to complete directory
 	completeDir := filepath.Join(s.dataDir, userID, "complete")
 	if err := os.MkdirAll(completeDir, 0755); err != nil {
