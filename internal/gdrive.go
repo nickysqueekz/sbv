@@ -9,7 +9,8 @@ import (
 "io"
 "log/slog"
 "net/http"
-	"net/url"
+"net/url"
+"os"
 "path/filepath"
 "sync"
 "time"
@@ -101,8 +102,8 @@ purgeExpiredStates()
 gdriveStateMu.Lock()
 gdriveStates[state] = oauthState{userID: sess.UserID, expires: time.Now().Add(10 * time.Minute)}
 gdriveStateMu.Unlock()
-url := cfg.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce)
-return c.Redirect(http.StatusTemporaryRedirect, url)
+authURL := cfg.AuthCodeURL(state, oauth2.AccessTypeOffline, oauth2.ApprovalForce)
+return c.Redirect(http.StatusTemporaryRedirect, authURL)
 }
 
 // HandleGDriveCallback is the public OAuth2 redirect target.
@@ -206,10 +207,9 @@ if search != "" {
 driveQ = fmt.Sprintf("name contains '%s' and trashed=false", sanitizeSearchTerm(search))
 }
 
-apiURL := fmt.Sprintf(
-"https://www.googleapis.com/drive/v3/files?q=%s&fields=files(id,name,mimeType,size,modifiedTime)&pageSize=100",
-encodeQueryParam(driveQ),
-)
+apiURL := "https://www.googleapis.com/drive/v3/files?q=" +
+url.QueryEscape(driveQ) +
+"&fields=files(id,name,mimeType,size,modifiedTime)&pageSize=100"
 
 req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, apiURL, nil)
 if err != nil {
@@ -239,7 +239,7 @@ result.Files = []gdriveFile{}
 return c.JSON(http.StatusOK, result.Files)
 }
 
-// HandleGDriveImport downloads a Drive file into the user's ingest directory.
+// HandleGDriveImport downloads a Drive file into the user''s ingest directory.
 func HandleGDriveImport(dataDir string) echo.HandlerFunc {
 return func(c echo.Context) error {
 sess := c.Get("session").(*Session)
@@ -258,8 +258,8 @@ if err != nil {
 return c.JSON(http.StatusUnauthorized, map[string]string{"error": "not connected to Google Drive"})
 }
 
-apiURL := fmt.Sprintf("https://www.googleapis.com/drive/v3/files/%s?alt=media",
-encodeQueryParam(body.FileID))
+apiURL := "https://www.googleapis.com/drive/v3/files/" +
+url.PathEscape(body.FileID) + "?alt=media"
 
 req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, apiURL, nil)
 if err != nil {
@@ -278,7 +278,7 @@ return c.JSON(http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("Dri
 }
 
 // Write to ingest directory
-		ingestDir := filepath.Join(dataDir, sess.UserID, "ingest")
+ingestDir := filepath.Join(dataDir, sess.UserID, "ingest")
 if err := os.MkdirAll(ingestDir, 0o700); err != nil {
 return c.JSON(http.StatusInternalServerError, map[string]string{"error": "failed to create ingest dir"})
 }
@@ -310,7 +310,7 @@ return c.JSON(http.StatusOK, map[string]string{"status": "disconnected"})
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-// sanitizeSearchTerm strips single quotes to prevent query injection in Drive API calls.
+// sanitizeSearchTerm strips single quotes to prevent injection in Drive API queries.
 func sanitizeSearchTerm(s string) string {
 out := make([]byte, 0, len(s))
 for i := 0; i < len(s); i++ {
@@ -319,9 +319,4 @@ out = append(out, s[i])
 }
 }
 return string(out)
-}
-
-// encodeQueryParam percent-encodes a string for use as a URL query parameter value.
-func encodeQueryParam(s string) string {
-	return url.QueryEscape(s)
 }
