@@ -81,16 +81,18 @@ function BrowseView({ dir, onBack }) {
   const [total, setTotal] = useState(0)
   const [search, setSearch] = useState('')
   const [searchInput, setSearchInput] = useState('')
-  const [importing, setImporting] = useState({})   // path -> true
-  const [results, setResults] = useState({})        // path -> {success, message}
+  const [sortBy, setSortBy] = useState('date')
+  const [sortDir, setSortDir] = useState('desc')
+  const [importing, setImporting] = useState({})
+  const [results, setResults] = useState({})
   const PER_PAGE = 25
 
-  const load = useCallback(async (p, s) => {
+  const load = useCallback(async (p, s, sb, sd) => {
     setLoading(true)
     setError(null)
     try {
       const res = await axios.get(`${API_BASE}/watch-dirs/browse`, {
-        params: { dir, page: p, per_page: PER_PAGE, search: s },
+        params: { dir, page: p, per_page: PER_PAGE, search: s, sort: sb, sort_dir: sd },
         withCredentials: true
       })
       setFiles(res.data.files || [])
@@ -104,17 +106,36 @@ function BrowseView({ dir, onBack }) {
     }
   }, [dir])
 
-  useEffect(() => { load(1, '') }, [load])
+  useEffect(() => { load(1, '', 'date', 'desc') }, [load])
 
   const handleSearch = (e) => {
     e.preventDefault()
     setSearch(searchInput)
-    load(1, searchInput)
+    load(1, searchInput, sortBy, sortDir)
   }
 
   const handlePageChange = (p) => {
-    load(p, search)
+    load(p, search, sortBy, sortDir)
     setResults({})
+  }
+
+  const handleSort = (col) => {
+    let newDir
+    if (col === sortBy) {
+      newDir = sortDir === 'asc' ? 'desc' : 'asc'
+    } else {
+      // Default direction per column
+      newDir = col === 'name' ? 'asc' : 'desc'
+    }
+    setSortBy(col)
+    setSortDir(newDir)
+    setPage(1)
+    load(1, search, col, newDir)
+  }
+
+  const SortArrow = ({ col }) => {
+    if (sortBy !== col) return <span className="text-muted ms-1" style={{fontSize:'0.7em'}}>↕</span>
+    return <span className="ms-1" style={{fontSize:'0.8em'}}>{sortDir === 'asc' ? '↑' : '↓'}</span>
   }
 
   const handleImport = async (file) => {
@@ -166,7 +187,7 @@ function BrowseView({ dir, onBack }) {
             />
             <Button type="submit" variant="outline-secondary">Filter</Button>
             {search && (
-              <Button variant="outline-danger" onClick={() => { setSearchInput(''); setSearch(''); load(1, '') }}>✕</Button>
+              <Button variant="outline-danger" onClick={() => { setSearchInput(''); setSearch(''); load(1, '', sortBy, sortDir) }}>✕</Button>
             )}
           </InputGroup>
         </Form>
@@ -181,9 +202,9 @@ function BrowseView({ dir, onBack }) {
           <table className="table table-sm table-hover align-middle mb-0">
             <thead className="table-light sticky-top">
               <tr>
-                <th>Filename</th>
-                <th className="text-end">Size</th>
-                <th>Date</th>
+                <th style={{cursor:'pointer'}} onClick={() => handleSort('name')}>Filename <SortArrow col="name" /></th>
+                <th className="text-end" style={{cursor:'pointer'}} onClick={() => handleSort('size')}>Size <SortArrow col="size" /></th>
+                <th style={{cursor:'pointer'}} onClick={() => handleSort('date')}>Date <SortArrow col="date" /></th>
                 <th></th>
               </tr>
             </thead>
@@ -218,7 +239,7 @@ function BrowseView({ dir, onBack }) {
       </Modal.Body>
       <Modal.Footer className="justify-content-between">
         <span className="text-muted small">
-          {total > 0 && `${total.toLocaleString()} file${total !== 1 ? 's' : ''}${search ? ` matching "${search}"` : ''} — newest first`}
+          {total > 0 && `${total.toLocaleString()} file${total !== 1 ? 's' : ''}${search ? ` matching "${search}"` : ''} — sorted by ${sortBy} ${sortDir === 'asc' ? '↑' : '↓'}`}
         </span>
         <div className="d-flex align-items-center gap-2">
           {totalPages > 1 && (

@@ -128,6 +128,8 @@ func HandleBrowseWatchDir(c echo.Context) error {
 	}
 
 	search := strings.ToLower(c.QueryParam("search"))
+	sortBy := c.QueryParam("sort")     // name, size, date (default: date)
+	sortDir := c.QueryParam("sort_dir") // asc, desc (default: desc for date, asc for name/size)
 
 	page := 1
 	perPage := 25
@@ -158,10 +160,28 @@ func HandleBrowseWatchDir(c echo.Context) error {
 		}
 	}
 
-	// Sort newest first
-	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].ModTime.After(filtered[j].ModTime)
-	})
+	// Sort the filtered results
+	asc := sortDir == "asc"
+	switch sortBy {
+	case "name":
+		if !asc {
+			sort.Slice(filtered, func(i, j int) bool { return filtered[i].Name > filtered[j].Name })
+		} else {
+			sort.Slice(filtered, func(i, j int) bool { return filtered[i].Name < filtered[j].Name })
+		}
+	case "size":
+		if asc {
+			sort.Slice(filtered, func(i, j int) bool { return filtered[i].Size < filtered[j].Size })
+		} else {
+			sort.Slice(filtered, func(i, j int) bool { return filtered[i].Size > filtered[j].Size })
+		}
+	default: // "date" — default desc (newest first)
+		if asc {
+			sort.Slice(filtered, func(i, j int) bool { return filtered[i].ModTime.Before(filtered[j].ModTime) })
+		} else {
+			sort.Slice(filtered, func(i, j int) bool { return filtered[i].ModTime.After(filtered[j].ModTime) })
+		}
+	}
 
 	total := len(filtered)
 	totalPages := (total + perPage - 1) / perPage
@@ -188,6 +208,8 @@ func HandleBrowseWatchDir(c echo.Context) error {
 		"per_page":    perPage,
 		"total":       total,
 		"total_pages": totalPages,
+		"sort":        sortBy,
+		"sort_dir":    sortDir,
 		"files":       pageFiles,
 	})
 }

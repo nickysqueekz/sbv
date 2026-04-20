@@ -53,6 +53,28 @@ function ConversationList({ conversations, selectedConversation, onSelectConvers
     return number
   }
 
+  const Badge = ({ label, variant = 'secondary' }) => (
+    <span className={`badge bg-${variant}`} style={{fontSize: '0.68rem'}}>{label}</span>
+  )
+
+  const getActivityBadges = (conv) => {
+    const badges = []
+    if (conv.sms_in > 0)         badges.push(<Badge key="si"  label={`${conv.sms_in} SMS ↓`}           variant="primary" />)
+    if (conv.sms_out > 0)        badges.push(<Badge key="so"  label={`${conv.sms_out} SMS ↑`}          variant="primary" />)
+    if (conv.mms_in > 0)         badges.push(<Badge key="mi"  label={`${conv.mms_in} MMS ↓`}           variant="info" />)
+    if (conv.mms_out > 0)        badges.push(<Badge key="mo"  label={`${conv.mms_out} MMS ↑`}          variant="info" />)
+    if (conv.call_incoming > 0)  badges.push(<Badge key="ci"  label={`${conv.call_incoming} ↓ call`}   variant="success" />)
+    if (conv.call_outgoing > 0)  badges.push(<Badge key="co"  label={`${conv.call_outgoing} ↑ call`}   variant="success" />)
+    if (conv.call_missed > 0)    badges.push(<Badge key="cm"  label={`${conv.call_missed} missed`}      variant="danger" />)
+    if (conv.call_voicemail > 0) badges.push(<Badge key="cv"  label={`${conv.call_voicemail} voicemail`} variant="warning" />)
+    if (conv.call_rejected > 0)  badges.push(<Badge key="cr"  label={`${conv.call_rejected} rejected`} variant="secondary" />)
+    // Fallback if no breakdown (old data)
+    if (badges.length === 0 && conv.message_count > 0) {
+      badges.push(<Badge key="mc" label={`${conv.message_count} item${conv.message_count !== 1 ? 's' : ''}`} />)
+    }
+    return badges
+  }
+
   const shouldDisplaySubject = (subject) => {
     if (!subject) return false
     // Filter out protocol buffer/RCS subjects
@@ -145,6 +167,12 @@ function ConversationList({ conversations, selectedConversation, onSelectConvers
                     {formatDate(conv.last_date)}
                   </small>
                 </div>
+                {/* Phone number shown below display name when it differs from name */}
+                {conv.contact_name && conv.contact_name !== '(Unknown)' && conv.address && (
+                  <div className="text-muted mb-1" style={{fontSize: '0.72rem'}}>
+                    {formatPhoneNumber(conv.address)}
+                  </div>
+                )}
                 <p className="small mb-1 text-muted" style={{
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
@@ -153,10 +181,8 @@ function ConversationList({ conversations, selectedConversation, onSelectConvers
                 }}>
                   {truncateMessage(conv.last_message, 50)}
                 </p>
-                <div className="d-flex align-items-center gap-1">
-                  <span className="badge bg-secondary" style={{fontSize: '0.7rem'}}>
-                    {conv.message_count} {conv.type === 'call' ? 'call' : 'message'}{conv.message_count !== 1 ? 's' : ''}
-                  </span>
+                <div className="d-flex align-items-center gap-1 flex-wrap">
+                  {getActivityBadges(conv)}
                 </div>
               </div>
             </div>

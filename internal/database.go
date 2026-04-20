@@ -464,7 +464,16 @@ func GetConversations(userDB *sql.DB, startDate, endDate *time.Time) ([]Conversa
 				LIMIT 1
 			) as last_message,
 			MAX(date) as last_date,
-			COUNT(*) as activity_count
+			COUNT(*) as activity_count,
+			SUM(CASE WHEN record_type = 1 AND type = 1 THEN 1 ELSE 0 END) as sms_in,
+			SUM(CASE WHEN record_type = 1 AND type = 2 THEN 1 ELSE 0 END) as sms_out,
+			SUM(CASE WHEN record_type = 2 AND type = 1 THEN 1 ELSE 0 END) as mms_in,
+			SUM(CASE WHEN record_type = 2 AND type = 2 THEN 1 ELSE 0 END) as mms_out,
+			SUM(CASE WHEN record_type = 3 AND type = 1 THEN 1 ELSE 0 END) as call_incoming,
+			SUM(CASE WHEN record_type = 3 AND type = 2 THEN 1 ELSE 0 END) as call_outgoing,
+			SUM(CASE WHEN record_type = 3 AND type = 3 THEN 1 ELSE 0 END) as call_missed,
+			SUM(CASE WHEN record_type = 3 AND type = 4 THEN 1 ELSE 0 END) as call_voicemail,
+			SUM(CASE WHEN record_type = 3 AND type = 5 THEN 1 ELSE 0 END) as call_rejected
 		FROM messages
 		WHERE 1=1
 	`
@@ -495,13 +504,17 @@ func GetConversations(userDB *sql.DB, startDate, endDate *time.Time) ([]Conversa
 		var c Conversation
 		var lastDateUnix int64
 		var subject sql.NullString
-		err := rows.Scan(&c.Address, &c.ContactName, &subject, &c.LastMessage, &lastDateUnix, &c.MessageCount)
+		err := rows.Scan(
+			&c.Address, &c.ContactName, &subject, &c.LastMessage, &lastDateUnix, &c.MessageCount,
+			&c.SMSIn, &c.SMSOut, &c.MMSIn, &c.MMSOut,
+			&c.CallIncoming, &c.CallOutgoing, &c.CallMissed, &c.CallVoicemail, &c.CallRejected,
+		)
 		if err != nil {
 			return nil, err
 		}
 		c.LastDate = time.Unix(lastDateUnix, 0)
 		c.Subject = subject.String
-		c.Type = "conversation" // Changed from "message" or "call" to indicate it's a merged conversation
+		c.Type = "conversation"
 		conversations = append(conversations, c)
 	}
 

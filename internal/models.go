@@ -52,6 +52,16 @@ type Conversation struct {
 	LastDate     time.Time `json:"last_date"`
 	MessageCount int       `json:"message_count"`
 	Type         string    `json:"type"` // "sms", "mms", or "call"
+	// Breakdown by record/call type
+	SMSIn        int `json:"sms_in"`
+	SMSOut       int `json:"sms_out"`
+	MMSIn        int `json:"mms_in"`
+	MMSOut       int `json:"mms_out"`
+	CallIncoming int `json:"call_incoming"`
+	CallOutgoing int `json:"call_outgoing"`
+	CallMissed   int `json:"call_missed"`
+	CallVoicemail int `json:"call_voicemail"`
+	CallRejected int `json:"call_rejected"`
 }
 
 type ActivityItem struct {
