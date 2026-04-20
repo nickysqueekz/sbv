@@ -2,11 +2,13 @@ package internal
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -417,6 +419,45 @@ func HandleProgress(c echo.Context) error {
 	return c.JSON(http.StatusOK, progress)
 }
 
+// HandleQueueStatus returns how many files are pending in the user's ingest directory
+func HandleQueueStatus(dataDir string) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		userID, ok := c.Get("user_id").(string)
+		if !ok || userID == "" {
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		}
+		ingestDir := filepath.Join(dataDir, userID, "ingest")
+		entries, err := os.ReadDir(ingestDir)
+		if err != nil {
+			return c.JSON(http.StatusOK, map[string]interface{}{"pending": 0, "files": []string{}})
+		}
+		var pending []string
+		for _, e := range entries {
+			name := e.Name()
+			if !e.IsDir() && !strings.HasPrefix(name, ".") && !strings.HasSuffix(name, ".log") {
+				pending = append(pending, name)
+			}
+		}
+		if pending == nil {
+			pending = []string{}
+		}
+		// Also include current processing progress if active
+		progress := GetUploadProgress()
+		resp := map[string]interface{}{
+			"pending": len(pending),
+			"files":   pending,
+		}
+		if progress != nil && (progress.Status == "parsing" || progress.Status == "importing") {
+			resp["processing"] = map[string]interface{}{
+				"processed": progress.ProcessedMessages,
+				"total":     progress.TotalMessages,
+				"status":    progress.Status,
+			}
+		}
+		return c.JSON(http.StatusOK, resp)
+	}
+}
+
 func HandleMedia(c echo.Context) error {
 	userDB, err := getUserDB(c)
 	if err != nil {
@@ -619,4 +660,150 @@ func HandleVersion(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{
 		"version": "dev",
 	})
+}
+// HandleExport streams an SMS Backup & Restore compatible XML file containing all messages and calls
+func HandleExport(c echo.Context) error {
+	userDB, err := getUserDB(c)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "database error"})
+	}
+
+	// Query all messages (SMS + MMS + calls) ordered by date
+	rows, err := userDB.Query(`
+		SELECT record_type, address, COALESCE(body,''), type, date,
+		       COALESCE(read,0), COALESCE(thread_id,''), COALESCE(subject,''),
+		       COALESCE(protocol,0), COALESCE(status,-1), COALESCE(service_center,''), COALESCE(sub_id,0),
+		       COALESCE(contact_name,''), COALESCE(duration,0), COALESCE(presentation,0),
+		       COALESCE(subscription_id,''), COALESCE(media_type,''), COALESCE(media_data,x''),
+		       COALESCE(content_type,''), COALESCE(read_report,0), COALESCE(read_status,0),
+		       COALESCE(message_id,''), COALESCE(message_size,0), COALESCE(message_type,0),
+		       COALESCE(sim_slot,0), COALESCE(addresses,''), COALESCE(sender,'')
+		FROM messages ORDER BY date ASC
+	`)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "query failed"})
+	}
+	defer rows.Close()
+
+	type exportRow struct {
+		RecordType    int
+		Address       string
+		Body          string
+		Type          int
+		DateUnix      int64
+		Read          int
+		ThreadID      string
+		Subject       string
+		Protocol      int
+		Status        int
+		ServiceCenter string
+		SubID         int
+		ContactName   string
+		Duration      int
+		Presentation  int
+		SubscriptionID string
+		MediaType     string
+		MediaData     []byte
+		ContentType   string
+		ReadReport    int
+		ReadStatus    int
+		MessageID     string
+		MessageSize   int
+		MessageType   int
+		SimSlot       int
+		Addresses     string
+		Sender        string
+	}
+
+	var allRows []exportRow
+	for rows.Next() {
+		var r exportRow
+		if err := rows.Scan(
+			&r.RecordType, &r.Address, &r.Body, &r.Type, &r.DateUnix,
+			&r.Read, &r.ThreadID, &r.Subject, &r.Protocol, &r.Status,
+			&r.ServiceCenter, &r.SubID, &r.ContactName, &r.Duration, &r.Presentation,
+			&r.SubscriptionID, &r.MediaType, &r.MediaData,
+			&r.ContentType, &r.ReadReport, &r.ReadStatus, &r.MessageID,
+			&r.MessageSize, &r.MessageType, &r.SimSlot, &r.Addresses, &r.Sender,
+		); err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": "scan failed"})
+		}
+		allRows = append(allRows, r)
+	}
+
+	c.Response().Header().Set("Content-Type", "text/xml; charset=utf-8")
+	c.Response().Header().Set("Content-Disposition", `attachment; filename="sms-export.xml"`)
+	c.Response().WriteHeader(http.StatusOK)
+
+	w := c.Response()
+	fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>`)
+	fmt.Fprintf(w, "\n<!-- Exported by SBV (SMS Backup Viewer) on %s -->\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(w, `<smses count="%d" backup_set="sbv-export" backup_date="%d">`, len(allRows), time.Now().UnixMilli())
+	fmt.Fprintf(w, "\n")
+
+	for _, r := range allRows {
+		dateMs := r.DateUnix * 1000  // stored as seconds, SMS B&R uses milliseconds
+		readableDate := time.Unix(r.DateUnix, 0).Format("Jan 02, 2006 3:04:05 PM")
+
+		switch r.RecordType {
+		case 1: // SMS
+			fmt.Fprintf(w, `  <sms protocol="%d" address="%s" date="%d" type="%d" subject="%s" body="%s" toa="" sc_toa="" service_center="%s" read="%d" status="%d" locked="0" sub_id="%d" readable_date="%s" contact_name="%s" />`,
+				r.Protocol, xmlEscape(r.Address), dateMs, r.Type,
+				xmlEscape(r.Subject), xmlEscape(r.Body),
+				xmlEscape(r.ServiceCenter), r.Read, r.Status, r.SubID,
+				readableDate, xmlEscape(r.ContactName),
+			)
+			fmt.Fprintf(w, "\n")
+
+		case 2: // MMS
+			// Build parts: text part + optional media part
+			parts := ""
+			partSeq := 0
+			if r.Body != "" && r.Body != "null" {
+				parts += fmt.Sprintf(`      <part seq="%d" ct="text/plain" name="" chset="106" cd="" fn="" cid="" cl="" ctt_s="" ctt_t="" text="%s" data="" />`,
+					partSeq, xmlEscape(r.Body))
+				parts += "\n"
+				partSeq++
+			}
+			if r.MediaType != "" && len(r.MediaData) > 0 {
+				mediaB64 := encodeBase64(r.MediaData)
+				parts += fmt.Sprintf(`      <part seq="%d" ct="%s" name="attachment" chset="" cd="" fn="" cid="" cl="" ctt_s="" ctt_t="" text="null" data="%s" />`,
+					partSeq, xmlEscape(r.MediaType), mediaB64)
+				parts += "\n"
+			}
+			// Build addrs
+			addrs := fmt.Sprintf(`      <addr address="%s" type="%d" charset="106" />`, xmlEscape(r.Address), r.Type)
+			fmt.Fprintf(w, `  <mms date="%d" rr="%d" sub="%s" read_status="%d" seen="1" m_id="%s" sim_slot="%d" m_size="%d" read="%d" m_type="%d" ct_t="application/vnd.wap.multipart.related" msg_box="%d" address="%s" sub_id="%d" readable_date="%s" contact_name="%s">`,
+				dateMs, r.ReadReport, xmlEscape(r.Subject), r.ReadStatus, xmlEscape(r.MessageID),
+				r.SimSlot, r.MessageSize, r.Read, r.MessageType, r.Type,
+				xmlEscape(r.Address), r.SubID, readableDate, xmlEscape(r.ContactName),
+			)
+			fmt.Fprintf(w, "\n    <parts>\n%s    </parts>\n    <addrs>\n%s\n    </addrs>\n  </mms>\n", parts, addrs)
+
+		case 3: // Call
+			fmt.Fprintf(w, `  <call number="%s" duration="%d" date="%d" type="%d" presentation="%d" subscription_id="%s" readable_date="%s" contact_name="%s" />`,
+				xmlEscape(r.Address), r.Duration, dateMs, r.Type, r.Presentation,
+				xmlEscape(r.SubscriptionID), readableDate, xmlEscape(r.ContactName),
+			)
+			fmt.Fprintf(w, "\n")
+		}
+	}
+
+	fmt.Fprintf(w, "</smses>\n")
+	return nil
+}
+
+func xmlEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, `"`, "&quot;")
+	return s
+}
+
+func encodeBase64(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(data)
 }

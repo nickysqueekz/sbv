@@ -42,6 +42,21 @@ function App() {
 
   // Mobile sidebar state
   const [showSidebar, setShowSidebar] = useState(true)
+  // Ingest queue status
+  const [queueStatus, setQueueStatus] = useState({ pending: 0, processing: null })
+
+  // Poll queue status every 10 seconds
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await axios.get(`${API_BASE}/queue-status`, { withCredentials: true })
+        setQueueStatus(res.data)
+      } catch {}
+    }
+    poll()
+    const interval = setInterval(poll, 10000)
+    return () => clearInterval(interval)
+  }, [])
 
   // Search state (persisted across tab switches)
   const [searchQuery, setSearchQuery] = useState('')
@@ -246,6 +261,22 @@ function App() {
                   </svg>
                   Settings
                 </Dropdown.Item>
+                <Dropdown.Item onClick={async () => {
+                  try {
+                    const res = await axios.get(`${API_BASE}/export`, { withCredentials: true, responseType: 'blob' })
+                    const url = URL.createObjectURL(res.data)
+                    const a = document.createElement('a')
+                    a.href = url
+                    a.download = 'sms-export.xml'
+                    a.click()
+                    URL.revokeObjectURL(url)
+                  } catch (e) { alert('Export failed: ' + (e.message || e)) }
+                }}>
+                  <svg style={{width: '1rem', height: '1rem'}} className="me-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  Export All (SMS B&R)
+                </Dropdown.Item>
                 <Dropdown.Item onClick={() => setShowPasswordModal(true)}>
                   <svg style={{width: '1rem', height: '1rem'}} className="me-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
@@ -264,6 +295,17 @@ function App() {
           </div>
         </div>
       </header>
+
+      {/* Ingest queue banner */}
+      {(queueStatus.pending > 0 || queueStatus.processing) && (
+        <div className="bg-warning text-dark px-3 py-1 d-flex align-items-center gap-2" style={{fontSize: '0.82rem', zIndex: 1029}}>
+          <div className="spinner-border spinner-border-sm text-dark" role="status" style={{width: '0.75rem', height: '0.75rem'}} />
+          {queueStatus.processing
+            ? <>Processing: {queueStatus.processing.processed.toLocaleString()} / {(queueStatus.processing.total || '?').toLocaleString()} messages — {queueStatus.pending} file{queueStatus.pending !== 1 ? 's' : ''} queued</>
+            : <>{queueStatus.pending} file{queueStatus.pending !== 1 ? 's' : ''} queued for import — processing starts within 1 minute</>
+          }
+        </div>
+      )}
 
       {/* View Switcher */}
       <div className="bg-white border-bottom shadow-sm">
