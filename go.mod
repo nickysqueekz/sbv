@@ -1,4 +1,4 @@
-module github.com/lowcarbdev/sbv
+module github.com/nickysqueekz/messageviewer
 
 go 1.25.7
 

@@ -40,7 +40,7 @@ func main() {
 	if dbPathPrefix == "" {
 		dbPathPrefix = "."
 	}
-	authDBPath := dbPathPrefix + "/sbv.db"
+authDBPath := dbPathPrefix + "/messageviewer.db"
 
 	// Optional: PostgreSQL mode when DATABASE_URL is set
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
@@ -108,6 +108,9 @@ func main() {
 	protected.POST("/auth/change-password", internal.HandleChangePassword)
 	protected.POST("/upload", internal.HandleUpload)
 	protected.GET("/conversations", internal.HandleConversations)
+	protected.DELETE("/conversations/:address", internal.HandleDeleteConversation)
+	protected.PUT("/conversations/:address/name", internal.HandleRenameConversation)
+	protected.DELETE("/all", internal.HandleClearAll)
 	protected.GET("/messages", internal.HandleMessages)
 	protected.GET("/activity", internal.HandleActivity)
 	protected.GET("/calls", internal.HandleCalls)
@@ -153,6 +156,7 @@ func main() {
 
 	// Start auto-import service
 	dataDir := dbPathPrefix + "/data"
+	protected.GET("/storage", internal.HandleStorage(dataDir))
 	protected.GET("/watch-dirs/browse", internal.HandleBrowseWatchDir(dataDir))
 	protected.POST("/watch-dirs/import", internal.HandleImportWatchDir(dataDir))
 	protected.POST("/watch-dirs/import-batch", internal.HandleImportBatchWatchDir(dataDir))

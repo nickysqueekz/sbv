@@ -41,7 +41,7 @@ RUN go mod tidy && go mod download
 
 # Build with FTS5 support
 # Use CGO for SQLite and libheif
-RUN CGO_ENABLED=1 go build -tags "fts5 heic" -o sbv .
+RUN CGO_ENABLED=1 go build -tags "fts5 heic" -o messageviewer .
 
 # Stage 3: Final runtime image
 FROM alpine:3
@@ -57,7 +57,7 @@ RUN apk add --no-cache \
     su-exec
 
 # Copy backend binary
-COPY --from=backend-builder /app/sbv .
+COPY --from=backend-builder /app/messageviewer .
 
 # Copy frontend build
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
@@ -87,4 +87,4 @@ EXPOSE 8081
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 
 # Run the application
-CMD ["./sbv"]
+CMD ["./messageviewer"]
