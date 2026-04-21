@@ -13,7 +13,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/lowcarbdev/sbv/internal"
+	"github.com/nickysqueekz/messageviewer/internal"
 	"golang.org/x/term"
 )
 
